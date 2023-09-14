@@ -8,11 +8,12 @@ import math
 import sys
 from typing import Iterable
 import numpy as np
-from torch.distributed import is_initialized, get_rank
+from torch.cuda.amp import autocast, GradScaler
 import torch
-from datasets.coco_eval import CocoEvaluator
+from torch.distributed import is_initialized, get_rank
 
 from tqdm import tqdm
+from datasets.coco_eval import CocoEvaluator
 import util.misc as utils
 from util.box_ops import rescale_bboxes
 from lib.evaluation.sg_eval import BasicSceneGraphEvaluator, calculate_mR_from_evaluator_list
@@ -32,12 +33,6 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
 
     header = 'Epoch: [{}]'.format(epoch)
     print_freq = 500
-
-    is_main_process = not is_initialized() or get_rank() == 0
-
-    # 在主进程上添加tqdm进度条
-    if is_main_process:
-        data_loader = tqdm(data_loader)
 
     for samples, targets in metric_logger.log_every(data_loader, print_freq, header):
         samples = samples.to(device)
@@ -81,6 +76,83 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
     print("Averaged stats:", metric_logger)
 
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
+
+
+def train_one_epoch_fp16(model: torch.nn.Module, criterion: torch.nn.Module,
+                    data_loader: Iterable, optimizer: torch.optim.Optimizer,
+                    device: torch.device, epoch: int, max_norm: float = 0):
+    
+    is_main_process = not is_initialized() or get_rank() == 0
+
+    # 在主进程上添加tqdm进度条
+    if is_main_process:
+        data_loader = tqdm(data_loader)
+
+    model.train()
+    criterion.train()
+    metric_logger = utils.MetricLogger(delimiter="  ")
+    metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
+    metric_logger.add_meter('class_error', utils.SmoothedValue(window_size=1, fmt='{value:.2f}'))
+    metric_logger.add_meter('sub_error', utils.SmoothedValue(window_size=1, fmt='{value:.2f}'))
+    metric_logger.add_meter('obj_error', utils.SmoothedValue(window_size=1, fmt='{value:.2f}'))
+    metric_logger.add_meter('rel_error', utils.SmoothedValue(window_size=1, fmt='{value:.2f}'))
+
+    header = 'Epoch: [{}]'.format(epoch)
+    print_freq = 500
+    scaler = GradScaler()
+    for samples, targets in metric_logger.log_every(data_loader, print_freq, header):
+        samples = samples.to(device)
+        targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
+
+        with autocast():  # 新增这行
+            outputs = model(samples)
+
+        loss_dict = criterion(outputs, targets)
+        weight_dict = criterion.weight_dict
+        losses = sum(loss_dict[k] * weight_dict[k] for k in loss_dict.keys() if k in weight_dict)
+
+        # reduce losses over all GPUs for logging purposes
+        loss_dict_reduced = utils.reduce_dict(loss_dict)
+        loss_dict_reduced_unscaled = {f'{k}_unscaled': v
+                                      for k, v in loss_dict_reduced.items()}
+        loss_dict_reduced_scaled = {k: v * weight_dict[k]
+                                    for k, v in loss_dict_reduced.items() if k in weight_dict}
+        losses_reduced_scaled = sum(loss_dict_reduced_scaled.values())
+
+        loss_value = losses_reduced_scaled.item()
+
+        if not math.isfinite(loss_value):
+            print("Loss is {}, stopping training".format(loss_value))
+            print(loss_dict_reduced)
+            sys.exit(1)
+
+        
+        # 使用 GradScaler 进行反向传播
+        scaler.scale(losses).backward()
+
+        # 在 scaler.step(optimizer) 之前进行梯度裁剪
+        if max_norm > 0:
+            scaler.unscale_(optimizer)  # 添加这一行来取消缩放梯度
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
+
+        # 使用 GradScaler 更新权重
+        scaler.step(optimizer)
+        scaler.update()
+
+        metric_logger.update(loss=loss_value, **loss_dict_reduced_scaled, **loss_dict_reduced_unscaled)
+        metric_logger.update(class_error=loss_dict_reduced['class_error'])
+        
+        metric_logger.update(sub_error=loss_dict_reduced['sub_error'])
+        metric_logger.update(obj_error=loss_dict_reduced['obj_error'])
+        metric_logger.update(rel_error=loss_dict_reduced['rel_error'])
+        metric_logger.update(lr=optimizer.param_groups[0]["lr"])
+
+    # gather the stats from all processes
+    metric_logger.synchronize_between_processes()
+    print("Averaged stats:", metric_logger)
+
+    return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
+
 
 @torch.no_grad()
 def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, args):
