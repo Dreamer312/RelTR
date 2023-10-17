@@ -41,16 +41,17 @@ class Transformer(nn.Module):
     def forward(self, src, mask, entity_embed, triplet_embed, pos_embed, so_embed):
         # flatten NxCxHxW to HWxNxC
         bs, c, h, w = src.shape
+        
         src = src.flatten(2).permute(2, 0, 1)
         pos_embed = pos_embed.flatten(2).permute(2, 0, 1)
 
-        entity_embed, entity = torch.split(entity_embed, c, dim=1)
-        triplet_embed, triplet = torch.split(triplet_embed, [c, 2 * c], dim=1)
+        entity_embed, entity = torch.split(entity_embed, c, dim=1) #[100, 256]  [100, 256]
+        triplet_embed, triplet = torch.split(triplet_embed, [c, 2 * c], dim=1) #triplet_embed的维度是 [200, 256]，而triplet的维度是 [200, 2*256]
 
-        entity_embed = entity_embed.unsqueeze(1).repeat(1, bs, 1)
-        triplet_embed = triplet_embed.unsqueeze(1).repeat(1, bs, 1)
-        entity = entity.unsqueeze(1).repeat(1, bs, 1)
-        triplet = triplet.unsqueeze(1).repeat(1, bs, 1)
+        entity_embed = entity_embed.unsqueeze(1).repeat(1, bs, 1) #entity_embed: [100, bs, 256]
+        triplet_embed = triplet_embed.unsqueeze(1).repeat(1, bs, 1) #triplet_embed: [200, bs, 256]
+        entity = entity.unsqueeze(1).repeat(1, bs, 1) #entity: [100, bs, 256]
+        triplet = triplet.unsqueeze(1).repeat(1, bs, 1) #triplet: [200, bs, 2*256]
         mask = mask.flatten(1)
 
         memory = self.encoder(src, src_key_padding_mask=mask, pos=pos_embed)
@@ -283,7 +284,7 @@ class TransformerDecoderLayer(nn.Module):
 
         # triplet layer
         # coupled self attention
-        t_num = triplet_pos.shape[0]
+        t_num = triplet_pos.shape[0]         # triplet_pos应该是原文的Et
         h_dim = triplet_pos.shape[2]
         tgt_sub, tgt_obj = torch.split(tgt_triplet, h_dim, dim=-1)
         q_sub = k_sub = self.with_pos_embed(self.with_pos_embed(tgt_sub, triplet_pos), so_pos[0])

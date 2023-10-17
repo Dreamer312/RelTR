@@ -3,4 +3,4 @@ ckpt/
 .idea/
 __pycache__/
 data/
-checkpoint/
+checkpoints/

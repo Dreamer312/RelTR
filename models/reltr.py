@@ -34,9 +34,9 @@ class RelTR(nn.Module):
         self.backbone = backbone
         self.aux_loss = aux_loss
 
-        self.entity_embed = nn.Embedding(num_entities, hidden_dim*2)
-        self.triplet_embed = nn.Embedding(num_triplets, hidden_dim*3)
-        self.so_embed = nn.Embedding(2, hidden_dim) # subject and object encoding
+        self.entity_embed = nn.Embedding(num_entities, hidden_dim*2)  #torch.Size([100, 512])
+        self.triplet_embed = nn.Embedding(num_triplets, hidden_dim*3) #triplet_embed torch.Size([200, 768])
+        self.so_embed = nn.Embedding(2, hidden_dim) # subject and object encoding [2,256]
 
         # entity prediction
         self.entity_class_embed = nn.Linear(hidden_dim, num_classes + 1)
@@ -108,6 +108,13 @@ class RelTR(nn.Module):
         outputs_class_obj = self.obj_class_embed(hs_obj)
         outputs_coord_obj = self.obj_bbox_embed(hs_obj).sigmoid()
 
+        # print(f'hs_sub {hs_sub.size()}')
+        # print(f"hs_obj {hs_obj.size()}")
+        # print(f'so_masks {so_masks.size()}')
+        # hs_sub torch.Size([6, 8, 200, 256])   8是bs
+        # hs_obj torch.Size([6, 8, 200, 256])
+        # so_masks torch.Size([6, 8, 200, 128])
+        # assert(0)
         outputs_class_rel = self.rel_class_embed(torch.cat((hs_sub, hs_obj, so_masks), dim=-1))
 
         out = {'pred_logits': outputs_class[-1], 'pred_boxes': outputs_coord[-1],
