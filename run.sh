@@ -11,13 +11,14 @@
 
 
 
+
 # python main.py \
 #     --dataset vg \
 #     --img_folder data/vg/images/ \
 #     --ann_path data/vg/ \
 #     --eval \
 #     --batch_size 1 \
-#     --resume checkpoint/checkpoint0149.pth
+#     --resume checkpoints/checkpoint/checkpoint0149.pth
 #====================================================================
 
 
@@ -77,18 +78,35 @@
 
 
 
-#4占坑
+#5  关闭了seed，使用ema
 #====================================================================
 # python -m torch.distributed.launch  \
 #     --nproc_per_node=2 \
-#     --use_env main.py \
+#     --use_env cmh_main.py \
 #     --dataset vg \
 #     --img_folder data/vg/images/ \
 #     --ann_path data/vg/ \
 #     --batch_size=8 \
-#     --output_dir checkpoint4 \
+#     --output_dir checkpoint5 \
 
 
+# export CUDA_VISIBLE_DEVICES=0
+# python main.py \
+#     --dataset vg \
+#     --img_folder data/vg/images/ \
+#     --ann_path data/vg/ \
+#     --eval \
+#     --batch_size 1 \
+#     --resume checkpoints/checkpoint5/checkpoint0149.pth
 
+
+export CUDA_VISIBLE_DEVICES=1
+python cmh_main.py \
+    --dataset vg \
+    --img_folder data/vg/images/ \
+    --ann_path data/vg/ \
+    --eval \
+    --batch_size 1 \
+    --resume checkpoints/checkpoint5/checkpoint0149.pth
 
 #====================================================================

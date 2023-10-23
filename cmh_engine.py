@@ -12,6 +12,10 @@ from torch.cuda.amp import autocast, GradScaler
 import torch
 from torch.distributed import is_initialized, get_rank
 
+import os
+os.environ["WANDB_MODE"] = "disabled"
+import wandb
+wandb.init(project="SGG", entity="dreamer0312")
 from tqdm import tqdm
 from datasets.coco_eval import CocoEvaluator
 import util.misc as utils
@@ -19,7 +23,7 @@ from util.box_ops import rescale_bboxes
 from lib.evaluation.sg_eval import BasicSceneGraphEvaluator, calculate_mR_from_evaluator_list
 from lib.openimages_evaluation import task_evaluation_sg
 
-def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
+def train_one_epoch(model: torch.nn.Module, ema_model, criterion: torch.nn.Module,
                     data_loader: Iterable, optimizer: torch.optim.Optimizer,
                     device: torch.device, epoch: int, max_norm: float = 0):
     model.train()
@@ -63,6 +67,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
         if max_norm > 0:
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
         optimizer.step()
+        ema_model.update(model)
 
         metric_logger.update(loss=loss_value, **loss_dict_reduced_scaled, **loss_dict_reduced_unscaled)
         metric_logger.update(class_error=loss_dict_reduced['class_error'])
@@ -70,6 +75,19 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
         metric_logger.update(obj_error=loss_dict_reduced['obj_error'])
         metric_logger.update(rel_error=loss_dict_reduced['rel_error'])
         metric_logger.update(lr=optimizer.param_groups[0]["lr"])
+
+        
+        if utils.is_main_process():
+            wandb.log({
+                "loss": loss_value,
+                "class_error": loss_dict_reduced['class_error'],
+                "sub_error": loss_dict_reduced['sub_error'],
+                "obj_error": loss_dict_reduced['obj_error'],
+                "rel_error": loss_dict_reduced['rel_error'],
+                "lr": optimizer.param_groups[0]["lr"],
+                **loss_dict_reduced_unscaled,
+                **loss_dict_reduced_scaled
+            })
 
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
@@ -245,7 +263,43 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, arg
 
     return stats, coco_evaluator
 
+# def evaluate_rel_batch(outputs, targets, evaluator, evaluator_list):
+#     for batch, target in enumerate(targets):
+#         target_bboxes_scaled = rescale_bboxes(target['boxes'].cpu(), torch.flip(target['orig_size'],dims=[0]).cpu()).clone().numpy() # recovered boxes with original size
+
+#         gt_entry = {'gt_classes': target['labels'].cpu().clone().numpy(),
+#                     'gt_relations': target['rel_annotations'].cpu().clone().numpy(),
+#                     'gt_boxes': target_bboxes_scaled}
+
+#         sub_bboxes_scaled = rescale_bboxes(outputs['sub_boxes'][batch].cpu(), torch.flip(target['orig_size'],dims=[0]).cpu()).clone().numpy()
+#         obj_bboxes_scaled = rescale_bboxes(outputs['obj_boxes'][batch].cpu(), torch.flip(target['orig_size'],dims=[0]).cpu()).clone().numpy()
+
+#         pred_sub_scores, pred_sub_classes = torch.max(outputs['sub_logits'][batch].softmax(-1)[:, :-1], dim=1)
+#         pred_obj_scores, pred_obj_classes = torch.max(outputs['obj_logits'][batch].softmax(-1)[:, :-1], dim=1)
+#         rel_scores = outputs['rel_logits'][batch][:,1:-1].softmax(-1)
+
+#         pred_entry = {'sub_boxes': sub_bboxes_scaled,
+#                       'sub_classes': pred_sub_classes.cpu().clone().numpy(),
+#                       'sub_scores': pred_sub_scores.cpu().clone().numpy(),
+#                       'obj_boxes': obj_bboxes_scaled,
+#                       'obj_classes': pred_obj_classes.cpu().clone().numpy(),
+#                       'obj_scores': pred_obj_scores.cpu().clone().numpy(),
+#                       'rel_scores': rel_scores.cpu().clone().numpy()}
+
+#         evaluator['sgdet'].evaluate_scene_graph_entry(gt_entry, pred_entry)
+
+#         if evaluator_list is not None:
+#             for pred_id, _, evaluator_rel in evaluator_list:
+#                 gt_entry_rel = gt_entry.copy()
+#                 mask = np.in1d(gt_entry_rel['gt_relations'][:, -1], pred_id)
+#                 gt_entry_rel['gt_relations'] = gt_entry_rel['gt_relations'][mask, :]
+#                 if gt_entry_rel['gt_relations'].shape[0] == 0:
+#                     continue
+#                 evaluator_rel['sgdet'].evaluate_scene_graph_entry(gt_entry_rel, pred_entry)
+
 def evaluate_rel_batch(outputs, targets, evaluator, evaluator_list):
+
+    #TODO
     for batch, target in enumerate(targets):
         target_bboxes_scaled = rescale_bboxes(target['boxes'].cpu(), torch.flip(target['orig_size'],dims=[0]).cpu()).clone().numpy() # recovered boxes with original size
 
@@ -258,8 +312,49 @@ def evaluate_rel_batch(outputs, targets, evaluator, evaluator_list):
 
         pred_sub_scores, pred_sub_classes = torch.max(outputs['sub_logits'][batch].softmax(-1)[:, :-1], dim=1)
         pred_obj_scores, pred_obj_classes = torch.max(outputs['obj_logits'][batch].softmax(-1)[:, :-1], dim=1)
-        rel_scores = outputs['rel_logits'][batch][:,1:-1].softmax(-1)
 
+        # if evaluator['sgdet'].rel_freq is not None :
+        #     counterfact_rel_logits = torch.tensor(evaluator['sgdet'].rel_freq).to(outputs['rel_logits'].device)
+        #     rel_scores = torch.softmax(outputs['rel_logits'][batch][:, 1:-1]-counterfact_rel_logits, dim=1)
+        # else:
+        #     rel_scores = outputs['rel_logits'][batch][:, 1:-1].softmax(-1)
+        rel_scores = outputs['rel_logits'][batch][:, 1:-1].softmax(-1)
+        ###################################################################A-relation-A
+        #mask = torch.logical_and((pred_sub_classes - pred_obj_classes != 0).cpu(), torch.logical_and(pred_obj_scores >= 0.002, pred_sub_scores >= 0.002).cpu())
+        mask = (pred_sub_classes - pred_obj_classes != 0).cpu()
+        if mask.sum() <= 198:
+            sub_bboxes_scaled = sub_bboxes_scaled[mask]
+            pred_sub_classes = pred_sub_classes[mask]
+            pred_sub_scores = pred_sub_scores[mask]
+            obj_bboxes_scaled = obj_bboxes_scaled[mask]
+            pred_obj_classes = pred_obj_classes[mask]
+            pred_obj_scores = pred_obj_scores[mask]
+            rel_scores = rel_scores[mask]
+
+            padded_indices = (pred_sub_scores + pred_obj_scores).sort(descending=True)[1][: mask.shape[0] - mask.sum()].cpu()
+            padded_sub_bboxes = sub_bboxes_scaled[padded_indices]
+            padded_sub_class = pred_sub_classes[padded_indices]
+            padded_sub_scores = pred_sub_scores[padded_indices]
+            padded_obj_bboxes = obj_bboxes_scaled[padded_indices]
+            padded_obj_class = pred_obj_classes[padded_indices]
+            padded_obj_scores = pred_obj_scores[padded_indices]
+            padded_rel_scores = rel_scores[padded_indices]
+            max_value_indices = torch.max(padded_rel_scores, dim=1)[1]
+            for i, idx in enumerate(max_value_indices):
+                second_max_index = (-padded_rel_scores[i]).sort()[1][1]
+                padded_rel_scores[i, second_max_index] += padded_rel_scores[i, idx]*0.2
+                padded_rel_scores[i, idx] = 0
+
+            sub_bboxes_scaled = np.concatenate([sub_bboxes_scaled, padded_sub_bboxes], axis=0)
+            pred_sub_classes = torch.cat([pred_sub_classes, padded_sub_class], dim=0)
+            pred_sub_scores = torch.cat([pred_sub_scores, padded_sub_scores],dim=0)
+            obj_bboxes_scaled = np.concatenate([obj_bboxes_scaled, padded_obj_bboxes], axis=0)
+            pred_obj_classes = torch.cat([pred_obj_classes, padded_obj_class], dim=0)
+            pred_obj_scores = torch.cat([pred_obj_scores, padded_obj_scores],dim=0)
+            rel_scores = torch.cat([rel_scores, padded_rel_scores],dim=0)
+        ###################################################################A-relation-A
+
+        #
         pred_entry = {'sub_boxes': sub_bboxes_scaled,
                       'sub_classes': pred_sub_classes.cpu().clone().numpy(),
                       'sub_scores': pred_sub_scores.cpu().clone().numpy(),
