@@ -100,13 +100,42 @@
 #     --resume checkpoints/checkpoint5/checkpoint0149.pth
 
 
-export CUDA_VISIBLE_DEVICES=1
-python cmh_main.py \
-    --dataset vg \
-    --img_folder data/vg/images/ \
-    --ann_path data/vg/ \
-    --eval \
-    --batch_size 1 \
-    --resume checkpoints/checkpoint5/checkpoint0149.pth
+# export CUDA_VISIBLE_DEVICES=1
+# python cmh_main.py \
+#     --dataset vg \
+#     --img_folder data/vg/images/ \
+#     --ann_path data/vg/ \
+#     --eval \
+#     --batch_size 1 \
+#     --resume checkpoints/checkpoint5/checkpoint0149.pth
+
+#====================================================================
+
+
+
+
+#7  zju调试
+#====================================================================
+export CUDA_VISIBLE_DEVICES=1,2,4,5
+# python -m torch.distributed.launch  \
+#     --nproc_per_node=2 \
+#     --use_env cmh_main.py \
+#     --dataset vg \
+#     --img_folder data/vg/images/ \
+#     --ann_path data/vg/ \
+#     --batch_size=4 \
+#     --output_dir checkpoint_zju_debug \
+
+torchrun --nproc_per_node=4 \
+    --standalone \
+    --nnodes=1 \
+    cmh_main.py \
+        --dataset vg \
+        --img_folder data/vg/images/ \
+        --ann_path data/vg/ \
+        --batch_size=4 \
+        --output_dir checkpoint_zju_debug \
+
+
 
 #====================================================================

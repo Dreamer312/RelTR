@@ -25,21 +25,21 @@ class RelTR(nn.Module):
             aux_loss: True if auxiliary decoding losses (loss at each decoder layer) are to be used.
         """
         super().__init__()
-        self.num_entities = num_entities
+        self.num_entities = num_entities  #100
         self.transformer = transformer
-        hidden_dim = transformer.d_model
+        hidden_dim = transformer.d_model #256
         self.hidden_dim = hidden_dim
 
         self.input_proj = nn.Conv2d(backbone.num_channels, hidden_dim, kernel_size=1)
         self.backbone = backbone
-        self.aux_loss = aux_loss
+        self.aux_loss = aux_loss #True
 
         self.entity_embed = nn.Embedding(num_entities, hidden_dim*2)  #torch.Size([100, 512])
         self.triplet_embed = nn.Embedding(num_triplets, hidden_dim*3) #triplet_embed torch.Size([200, 768])
         self.so_embed = nn.Embedding(2, hidden_dim) # subject and object encoding [2,256]
 
         # entity prediction
-        self.entity_class_embed = nn.Linear(hidden_dim, num_classes + 1)
+        self.entity_class_embed = nn.Linear(hidden_dim, num_classes + 1)  # num_classes 151   label是从1开始的
         self.entity_bbox_embed = MLP(hidden_dim, hidden_dim, 4, 3)
 
         # mask head
@@ -56,7 +56,7 @@ class RelTR(nn.Module):
                                         nn.Linear(512, 128))
 
         # predicate classification
-        self.rel_class_embed = MLP(hidden_dim*2+128, hidden_dim, num_rel_classes + 1, 2)
+        self.rel_class_embed = MLP(hidden_dim*2+128, hidden_dim, num_rel_classes + 1, 2)  # num_rel_classes==51
 
         # subject/object label classfication and box regression
         self.sub_class_embed = nn.Linear(hidden_dim, num_classes + 1)
@@ -89,15 +89,15 @@ class RelTR(nn.Module):
             samples = nested_tensor_from_tensor_list(samples)
         features, pos = self.backbone(samples)
 
-        src, mask = features[-1].decompose()
+        src, mask = features[-1].decompose()  # torch.Size([bs, 2048, 28, 34])
         assert mask is not None
         hs, hs_t, so_masks, _ = self.transformer(self.input_proj(src), mask, self.entity_embed.weight,
                                                  self.triplet_embed.weight, pos[-1], self.so_embed.weight)
-        so_masks = so_masks.detach()
-        so_masks = self.so_mask_conv(so_masks.view(-1, 2, src.shape[-2],src.shape[-1])).view(hs_t.shape[0], hs_t.shape[1], hs_t.shape[2],-1)
-        so_masks = self.so_mask_fc(so_masks)
+        so_masks = so_masks.detach() #torch.Size([6, bs, 200, 2, 28, 34])
+        so_masks = self.so_mask_conv(so_masks.view(-1, 2, src.shape[-2],src.shape[-1])).view(hs_t.shape[0], hs_t.shape[1], hs_t.shape[2],-1) #torch.Size([6, bs, 200, 2048])
+        so_masks = self.so_mask_fc(so_masks) # torch.Size([6, bs, 200, 128])
 
-        hs_sub, hs_obj = torch.split(hs_t, self.hidden_dim, dim=-1)
+        hs_sub, hs_obj = torch.split(hs_t, self.hidden_dim, dim=-1) # torch.Size([6, bs, 200, 256]) torch.Size([6, bs, 200, 256])
 
         outputs_class = self.entity_class_embed(hs)
         outputs_coord = self.entity_bbox_embed(hs).sigmoid()
@@ -115,7 +115,7 @@ class RelTR(nn.Module):
         # hs_obj torch.Size([6, 8, 200, 256])
         # so_masks torch.Size([6, 8, 200, 128])
         # assert(0)
-        outputs_class_rel = self.rel_class_embed(torch.cat((hs_sub, hs_obj, so_masks), dim=-1))
+        outputs_class_rel = self.rel_class_embed(torch.cat((hs_sub, hs_obj, so_masks), dim=-1)) # torch.Size([6, bs, 200, 52])
 
         out = {'pred_logits': outputs_class[-1], 'pred_boxes': outputs_coord[-1],
                'sub_logits': outputs_class_sub[-1], 'sub_boxes': outputs_coord_sub[-1],

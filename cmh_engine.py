@@ -36,7 +36,7 @@ def train_one_epoch(model: torch.nn.Module, ema_model, criterion: torch.nn.Modul
     metric_logger.add_meter('rel_error', utils.SmoothedValue(window_size=1, fmt='{value:.2f}'))
 
     header = 'Epoch: [{}]'.format(epoch)
-    print_freq = 500
+    print_freq = 10
 
     for samples, targets in metric_logger.log_every(data_loader, print_freq, header):
         samples = samples.to(device)

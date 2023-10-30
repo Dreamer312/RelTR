@@ -60,18 +60,21 @@ class HungarianMatcher(nn.Module):
             Subject loss weight (Type: bool) to determine if back propagation should be conducted
             Object loss weight (Type: bool) to determine if back propagation should be conducted
         """
-        bs, num_queries = outputs["pred_logits"].shape[:2]
-        num_queries_rel = outputs["rel_logits"].shape[1]
+        bs, num_queries = outputs["pred_logits"].shape[:2] # bs 100
+        num_queries_rel = outputs["rel_logits"].shape[1] # 200
         alpha = 0.25
         gamma = 2.0
 
+        # for labels in targets:
+        #     print(labels["rel_annotations"])   #4张图片分别是4 9 8 10个三元组 [4,3]  [9,3]  [8,3]  [10, 3]
+
         # We flatten to compute the cost matrices in a batch
-        out_prob = outputs["pred_logits"].flatten(0, 1).sigmoid()
-        out_bbox = outputs["pred_boxes"].flatten(0, 1)
+        out_prob = outputs["pred_logits"].flatten(0, 1).sigmoid()  # bs=4 torch.Size([400, 152])
+        out_bbox = outputs["pred_boxes"].flatten(0, 1) # bs=4  torch.Size([400, 4])
 
         # Also concat the target labels and boxes
-        tgt_ids = torch.cat([v["labels"] for v in targets])
-        tgt_bbox = torch.cat([v["boxes"] for v in targets])
+        tgt_ids = torch.cat([v["labels"] for v in targets]) # torch.Size([47])  4张图共47个物体
+        tgt_bbox = torch.cat([v["boxes"] for v in targets]) # torch.Size([47, 4]) 4张图共47个物体bbox
 
         # Compute the entity classification cost. We borrow the cost function from Deformable DETR (https://arxiv.org/abs/2010.04159)
         neg_cost_class = (1 - alpha) * (out_prob ** gamma) * (-(1 - out_prob + 1e-8).log())
@@ -85,15 +88,19 @@ class HungarianMatcher(nn.Module):
         cost_giou = -generalized_box_iou(box_cxcywh_to_xyxy(out_bbox), box_cxcywh_to_xyxy(tgt_bbox))
 
         # Final entity cost matrix
-        C = self.cost_bbox * cost_bbox + self.cost_class * cost_class + self.cost_giou * cost_giou
-        C = C.view(bs, num_queries, -1).cpu()
+        C = self.cost_bbox * cost_bbox + self.cost_class * cost_class + self.cost_giou * cost_giou  # 4个图，每个100query torch.Size([400, 47])
+        C = C.view(bs, num_queries, -1).cpu() # torch.Size([4, 100, 47])
 
-        sizes = [len(v["boxes"]) for v in targets]
+        sizes = [len(v["boxes"]) for v in targets]  # [12, 10, 14, 11]
         indices = [linear_sum_assignment(c[i]) for i, c in enumerate(C.split(sizes, -1))]
 
         # Concat the subject/object/predicate labels and subject/object boxes
-        sub_tgt_bbox = torch.cat([v['boxes'][v['rel_annotations'][:, 0]] for v in targets])
-        sub_tgt_ids = torch.cat([v['labels'][v['rel_annotations'][:, 0]] for v in targets])
+        sub_tgt_bbox = torch.cat([v['boxes'][v['rel_annotations'][:, 0]] for v in targets]) # torch.Size([31, 4])
+        sub_tgt_ids = torch.cat([v['labels'][v['rel_annotations'][:, 0]] for v in targets]) # torch.Size([31]) 
+        #sub_tgt_ids tensor([ 77,  95,  95,  95,   8,  40,  40, 121,  82,  82,  84, 121,  43,  20,
+        #20,  72,  53,  77,  78,  78, 111,  58,  78,  78,  78,  78,  78,  78,
+        #78,  78,  92], device='cuda:0')
+
         obj_tgt_bbox = torch.cat([v['boxes'][v['rel_annotations'][:, 1]] for v in targets])
         obj_tgt_ids = torch.cat([v['labels'][v['rel_annotations'][:, 1]] for v in targets])
         rel_tgt_ids = torch.cat([v["rel_annotations"][:, 2] for v in targets])

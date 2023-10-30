@@ -40,10 +40,10 @@ class Transformer(nn.Module):
 
     def forward(self, src, mask, entity_embed, triplet_embed, pos_embed, so_embed):
         # flatten NxCxHxW to HWxNxC
-        bs, c, h, w = src.shape
+        bs, c, h, w = src.shape # bs 256 28 34
         
-        src = src.flatten(2).permute(2, 0, 1)
-        pos_embed = pos_embed.flatten(2).permute(2, 0, 1)
+        src = src.flatten(2).permute(2, 0, 1) # torch.Size([952, bs, 256])
+        pos_embed = pos_embed.flatten(2).permute(2, 0, 1) #torch.Size([952, bs, 256])
 
         entity_embed, entity = torch.split(entity_embed, c, dim=1) #[100, 256]  [100, 256]
         triplet_embed, triplet = torch.split(triplet_embed, [c, 2 * c], dim=1) #triplet_embed的维度是 [200, 256]，而triplet的维度是 [200, 2*256]
@@ -54,11 +54,13 @@ class Transformer(nn.Module):
         triplet = triplet.unsqueeze(1).repeat(1, bs, 1) #triplet: [200, bs, 2*256]
         mask = mask.flatten(1)
 
-        memory = self.encoder(src, src_key_padding_mask=mask, pos=pos_embed)
+        memory = self.encoder(src, src_key_padding_mask=mask, pos=pos_embed) # torch.Size([952, bs, 256])
         hs, hs_t, sub_maps, obj_maps = self.decoder(entity, triplet, memory, memory_key_padding_mask=mask,
                                                     pos=pos_embed, entity_pos=entity_embed,
                                                     triplet_pos=triplet_embed, so_pos=so_embed)
+        # hs torch.Size([6, 100, bs, 256])    hs_t torch.Size([6, 200, bs, 512])  sub_maps torch.Size([6, bs, 200, 952])
 
+        #so_masks torch.Size([6, bs, 200, 2, 28, 34])
         so_masks = torch.cat((sub_maps.reshape(sub_maps.shape[0], bs, sub_maps.shape[2], 1, h, w),
                               obj_maps.reshape(obj_maps.shape[0], bs, obj_maps.shape[2], 1, h, w)), dim=3)
 
@@ -164,8 +166,8 @@ class TransformerDecoder(nn.Module):
                 memory_key_padding_mask: Optional[Tensor] = None,
                 pos: Optional[Tensor] = None, entity_pos: Optional[Tensor] = None,
                 triplet_pos: Optional[Tensor] = None, so_pos: Optional[Tensor] = None):
-        output_entity = entity
-        output_triplet = triplet
+        output_entity = entity # torch.Size([100, bs, 256])
+        output_triplet = triplet # torch.Size([200, bs, 512])
         intermediate_entity = []
         intermediate_triplet = []
         intermediate_submaps = []
@@ -269,29 +271,29 @@ class TransformerDecoderLayer(nn.Module):
                 pos: Optional[Tensor] = None):
 
         # entity layer
-        q_entity = k_entity = self.with_pos_embed(tgt_entity, entity_pos)
+        q_entity = k_entity = self.with_pos_embed(tgt_entity, entity_pos)  #torch.Size([100, bs, 256]) 
         tgt2_entity = self.self_attn_entity(q_entity, k_entity, value=tgt_entity, attn_mask=tgt_mask,
                                             key_padding_mask=tgt_key_padding_mask)[0]
         tgt_entity = tgt_entity + self.dropout2_entity(tgt2_entity)
-        tgt_entity = self.norm2_entity(tgt_entity)
+        tgt_entity = self.norm2_entity(tgt_entity) # torch.Size([100, bs, 256])
 
         tgt2_entity = self.cross_attn_entity(query=self.with_pos_embed(tgt_entity, entity_pos),
                                              key=self.with_pos_embed(memory, pos), value=memory, attn_mask=memory_mask,
                                              key_padding_mask=memory_key_padding_mask)[0]
-        tgt_entity = tgt_entity + self.dropout1_entity(tgt2_entity)
+        tgt_entity = tgt_entity + self.dropout1_entity(tgt2_entity) # torch.Size([100, bs, 256])
         tgt_entity = self.norm1_entity(tgt_entity)
-        tgt_entity = self.forward_ffn_entity(tgt_entity)
+        tgt_entity = self.forward_ffn_entity(tgt_entity) # torch.Size([100, bs, 256])
 
         # triplet layer
         # coupled self attention
-        t_num = triplet_pos.shape[0]         # triplet_pos应该是原文的Et
-        h_dim = triplet_pos.shape[2]
-        tgt_sub, tgt_obj = torch.split(tgt_triplet, h_dim, dim=-1)
+        t_num = triplet_pos.shape[0]         # triplet_pos应该是原文的Et      t_num 200
+        h_dim = triplet_pos.shape[2] #256
+        tgt_sub, tgt_obj = torch.split(tgt_triplet, h_dim, dim=-1) #torch.Size([200, 4, 256]) torch.Size([200, 4, 256])
         q_sub = k_sub = self.with_pos_embed(self.with_pos_embed(tgt_sub, triplet_pos), so_pos[0])
         q_obj = k_obj = self.with_pos_embed(self.with_pos_embed(tgt_obj, triplet_pos), so_pos[1])
-        q_so = torch.cat((q_sub, q_obj), dim=0)
-        k_so = torch.cat((k_sub, k_obj), dim=0)
-        tgt_so = torch.cat((tgt_sub, tgt_obj), dim=0)
+        q_so = torch.cat((q_sub, q_obj), dim=0) # torch.Size([400, bs, 256])
+        k_so = torch.cat((k_sub, k_obj), dim=0) # torch.Size([400, bs, 256])
+        tgt_so = torch.cat((tgt_sub, tgt_obj), dim=0)  # torch.Size([400, bs 256])
 
         tgt2_so = self.self_attn_so(q_so, k_so, tgt_so)[0]
         tgt_so = tgt_so + self.dropout2_so(tgt2_so)
@@ -304,21 +306,21 @@ class TransformerDecoderLayer(nn.Module):
                                                  value=memory, attn_mask=memory_mask,
                                                  key_padding_mask=memory_key_padding_mask)
         tgt_sub = tgt_sub + self.dropout1_sub(tgt2_sub)
-        tgt_sub = self.norm1_sub(tgt_sub)
+        tgt_sub = self.norm1_sub(tgt_sub) # torch.Size([200, bs, 256])         sub_maps torch.Size([bs, 200, 952])
 
         # subject branch - decoupled entity attention
         tgt2_sub = self.cross_sub_entity(query=self.with_pos_embed(tgt_sub, triplet_pos),
                                          key=tgt_entity, value=tgt_entity)[0]
         tgt_sub = tgt_sub + self.dropout2_sub(tgt2_sub)
         tgt_sub = self.norm2_sub(tgt_sub)
-        tgt_sub = self.forward_ffn_sub(tgt_sub)
+        tgt_sub = self.forward_ffn_sub(tgt_sub)  # torch.Size([200, bs, 256])
 
         # object branch - decoupled visual attention
         tgt2_obj, obj_maps = self.cross_attn_obj(query=self.with_pos_embed(tgt_obj, triplet_pos),
                                                  key=self.with_pos_embed(memory, pos),
                                                  value=memory, attn_mask=memory_mask,
                                                  key_padding_mask=memory_key_padding_mask)
-        tgt_obj = tgt_obj + self.dropout1_obj(tgt2_obj)
+        tgt_obj = tgt_obj + self.dropout1_obj(tgt2_obj)  # torch.Size([200, bs, 256])
         tgt_obj = self.norm1_obj(tgt_obj)
 
         # object branch - decoupled entity attention
@@ -326,9 +328,9 @@ class TransformerDecoderLayer(nn.Module):
                                          key=tgt_entity, value=tgt_entity)[0]
         tgt_obj = tgt_obj + self.dropout2_obj(tgt2_obj)
         tgt_obj = self.norm2_obj(tgt_obj)
-        tgt_obj = self.forward_ffn_obj(tgt_obj)
+        tgt_obj = self.forward_ffn_obj(tgt_obj)  #torch.Size([200, bs, 256])
 
-        tgt_triplet = torch.cat((tgt_sub, tgt_obj), dim=-1)
+        tgt_triplet = torch.cat((tgt_sub, tgt_obj), dim=-1) #torch.Size([200, bs, 512])
         return tgt_entity, tgt_triplet, sub_maps, obj_maps
 
 
