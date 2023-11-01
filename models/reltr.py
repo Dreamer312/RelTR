@@ -39,7 +39,10 @@ class RelTR(nn.Module):
         self.so_embed = nn.Embedding(2, hidden_dim) # subject and object encoding [2,256]
 
         # entity prediction
-        self.entity_class_embed = nn.Linear(hidden_dim, num_classes + 1)  # num_classes 151   label是从1开始的
+        # 150类的话 索引是0-149   151类的话索引是0-150 实际只用1-150 0不用
+        # self.entity_class_embed 进去是256  出来是152
+        self.entity_class_embed = nn.Linear(hidden_dim, num_classes + 1)  # 传进来的时候就是num_classes 151   label是从1开始的
+
         self.entity_bbox_embed = MLP(hidden_dim, hidden_dim, 4, 3)
 
         # mask head
@@ -56,6 +59,7 @@ class RelTR(nn.Module):
                                         nn.Linear(512, 128))
 
         # predicate classification
+        # 640 256 256 52
         self.rel_class_embed = MLP(hidden_dim*2+128, hidden_dim, num_rel_classes + 1, 2)  # num_rel_classes==51
 
         # subject/object label classfication and box regression
@@ -108,13 +112,11 @@ class RelTR(nn.Module):
         outputs_class_obj = self.obj_class_embed(hs_obj)
         outputs_coord_obj = self.obj_bbox_embed(hs_obj).sigmoid()
 
-        # print(f'hs_sub {hs_sub.size()}')
-        # print(f"hs_obj {hs_obj.size()}")
-        # print(f'so_masks {so_masks.size()}')
-        # hs_sub torch.Size([6, 8, 200, 256])   8是bs
-        # hs_obj torch.Size([6, 8, 200, 256])
-        # so_masks torch.Size([6, 8, 200, 128])
-        # assert(0)
+
+        # hs_sub torch.Size([6, bs, 200, 256])   8是bs
+        # hs_obj torch.Size([6, bs, 200, 256])
+        # so_masks torch.Size([6, bs, 200, 128])
+
         outputs_class_rel = self.rel_class_embed(torch.cat((hs_sub, hs_obj, so_masks), dim=-1)) # torch.Size([6, bs, 200, 52])
 
         out = {'pred_logits': outputs_class[-1], 'pred_boxes': outputs_coord[-1],

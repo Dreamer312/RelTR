@@ -8,6 +8,7 @@ from torch import nn
 from .util.misc import (NestedTensor, nested_tensor_from_tensor_list,
                        accuracy, get_world_size, interpolate,
                        is_dist_avail_and_initialized, inverse_sigmoid)
+from .backbone import build_backbone
 
 
 def sigmoid_focal_loss(inputs, targets, num_boxes, alpha: float = 0.25, gamma: float = 2):
@@ -131,3 +132,45 @@ class DABRelTR(nn.Module):
         else:
             nn.init.constant_(self.bbox_embed.layers[-1].weight.data, 0)
             nn.init.constant_(self.bbox_embed.layers[-1].bias.data, 0)
+
+
+
+def build_DABRelTR(args):
+
+    num_classes = 151 if args.dataset != 'oi' else 289 # some entity categories in OIV6 are deactivated.
+    num_rel_classes = 51 if args.dataset != 'oi' else 31
+
+    device = torch.device(args.device)
+    backbone = build_backbone(args)
+
+    transformer = build_transformer(args)
+    matcher = build_matcher(args)
+    model = RelTR(
+        backbone,
+        transformer,
+        num_classes=num_classes,
+        num_rel_classes = num_rel_classes,
+        num_entities=args.num_entities,
+        num_triplets=args.num_triplets,
+        aux_loss=args.aux_loss,
+        matcher=matcher)
+
+    weight_dict = {'loss_ce': 1, 'loss_bbox': args.bbox_loss_coef}
+    weight_dict['loss_giou'] = args.giou_loss_coef
+    weight_dict['loss_rel'] = args.rel_loss_coef
+
+    # TODO this is a hack
+    if args.aux_loss:
+        aux_weight_dict = {}
+        for i in range(args.dec_layers - 1):
+            aux_weight_dict.update({k + f'_{i}': v for k, v in weight_dict.items()})
+        weight_dict.update(aux_weight_dict)
+
+    losses = ['labels', 'boxes', 'cardinality', "relations"]
+
+    criterion = SetCriterion(num_classes, num_rel_classes, matcher=matcher, weight_dict=weight_dict,
+                             eos_coef=args.eos_coef, losses=losses)
+    criterion.to(device)
+    postprocessors = {'bbox': PostProcess()}
+
+    return model, criterion, postprocessors

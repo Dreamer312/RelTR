@@ -40,12 +40,76 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
         data_loader = tqdm(data_loader)
 
     for samples, targets in metric_logger.log_every(data_loader, print_freq, header):
-        samples = samples.to(device)
+
+
+        samples = samples.to(device) # torch.Size([bs, 3, 866, 1081])  mask. torch.Size([bs, 866, 1081])
+
+        # 0:{'boxes': tensor([[0.4970, 0.3808, 0.9140, 0.5694],
+        # [0.5310, 0.1228, 0.1740, 0.0747],
+        # [0.3780, 0.4448, 0.0960, 0.0498],
+        # [0.2710, 0.0907, 0.1540, 0.1032],
+        # [0.5330, 0.4591, 0.8980, 0.7189],
+        # [0.4580, 0.0783, 0.1880, 0.1352],
+        # [0.2520, 0.4039, 0.1040, 0.2313],
+        # [0.7370, 0.7224, 0.1740, 0.1993],
+        # [0.7250, 0.7082, 0.2620, 0.2278],
+        # [0.4880, 0.3256, 0.1120, 0.0819],
+        # [0.4320, 0.4751, 0.5560, 0.1815],
+        # [0.1010, 0.4288, 0.0460, 0.1530]]), 'labels': tensor([ 22,  76,  77,  90,  95,  95, 127, 130, 144, 145, 147, 147]), 'image_id': tensor([2389878]), 'area': tensor([342470.6562,   8593.3428,   3204.3765,  10581.4590, 424867.5625,
+        #  16803.0957,  16003.1699,  22973.2734,  39621.9961,   6160.8228,
+        #  66786.6875,   4771.4800]), 'iscrowd': tensor([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]), 'orig_size': tensor([281, 500]), 'size': tensor([ 608, 1081]), 'rel_annotations': tensor([[ 2,  4, 29],
+        # [ 4,  6, 20],
+        # [ 4,  8, 20],
+        # [ 4,  9, 20]])}
+
+        # 3:{boxes:[11,4], labels:[11], image_id:[2392873], area:[11], iscrowd, orig_size:[375,500], size:[704,938], relation:torch.Size([10, 3]) }
+
+
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
         outputs = model(samples)
+        #outputs:{
+        # pred_logits: torch.Size([bs, 100, 152])
+        # pred_boxes: torch.Size([bs, 100, 4])
+        # sub_logits: torch.Size([bs, 200, 152])
+        # sub_boxes:torch.Size([bs, 200, 4])
+        # obj_logits: torch.Size([bs, 200, 152])
+        # obj_boxes: torch.Size([bs, 200, 4])
+        # rel_logits: torch.Size([bs, 200, 52])
+        #字典队列，长度5[{...},{内容和上面一样}]
+        # }
         loss_dict = criterion(outputs, targets)
+        #{'loss_ce': tensor(2.9685, device='cuda:0', grad_fn=<DivBackward0>), 
+        # 'class_error': tensor(89.3617, device='cuda:0'), 
+        # 'sub_error': tensor(93.5484, device='cuda:0'), 
+        # 'obj_error': tensor(100., device='cuda:0'), 
+        # 'loss_bbox': tensor(1.1930, device='cuda:0', grad_fn=<DivBackward0>), 
+        # 'loss_giou': tensor(1.3322, device='cuda:0', grad_fn=<DivBackward0>), 
+        # 'cardinality_error': tensor(192.2500, device='cuda:0'), 
+        # 'loss_rel': tensor(4.1154, device='cuda:0', grad_fn=<NllLoss2DBackward0>), 
+        # 'rel_error': tensor(96.7742, device='cuda:0'), 
+        # 'loss_ce_0': tensor(3.1002, device='cuda:0', grad_fn=<DivBackward0>), 
+        # 'loss_bbox_0': tensor(1.1808, device='cuda:0', grad_fn=<DivBackward0>), 
+        # 'loss_giou_0': tensor(1.3306, device='cuda:0', grad_fn=<DivBackward0>), 
+        # 'cardinality_error_0': tensor(192.2500, device='cuda:0'), 
+        # 'loss_rel_0': tensor(3.9999, device='cuda:0', grad_fn=<NllLoss2DBackward0>), 
+        #  ...
+        #  loss_rel_4:tensor(4.1476, device='cuda:0', grad_fn=<NllLoss2DBackward0>)}
+
+
+        #{'loss_ce': 1, 
+        # 'loss_bbox': 5, 
+        # 'loss_giou': 2, 
+        # 'loss_rel': 1, 
+        # 'loss_ce_0': 1, 
+        # 'loss_bbox_0': 5, 
+        # 'loss_giou_0': 2, 
+        # 'loss_rel_0': 1, 
+        # 'loss_ce_1': 1, 
+        # 'loss_bbox_1': 5, 
+        # 'loss_giou_1': 2, 'loss_rel_1': 1, 'loss_ce_2': 1, 'loss_bbox_2': 5, ...}
         weight_dict = criterion.weight_dict
+
         losses = sum(loss_dict[k] * weight_dict[k] for k in loss_dict.keys() if k in weight_dict)
 
         # reduce losses over all GPUs for logging purposes
