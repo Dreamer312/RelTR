@@ -38,6 +38,32 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
     # 在主进程上添加tqdm进度条
     if is_main_process:
         data_loader = tqdm(data_loader)
+    
+
+
+
+
+    # min_label = float('inf')
+    # max_label = float('-inf')
+    # min_rel_anno = float('inf')
+    # max_rel_anno = float('-inf')
+    # for samples, targets in data_loader:  # 假设data_loader是你的数据加载器
+
+    #     # 更新labels的最小和最大值
+    #     min_label = min(min_label, torch.min(targets[0]['labels']).item())
+    #     max_label = max(max_label, torch.max(targets[0]['labels']).item())
+
+    #     # 更新rel_annotations的第三个数的最小和最大值
+    #     third_elements = targets[0]['rel_annotations'][:, 2]  # 获取所有rel_annotations的第三个数
+    #     min_rel_anno = min(min_rel_anno, torch.min(third_elements).item())
+    #     max_rel_anno = max(max_rel_anno, torch.max(third_elements).item())
+    # print(f'Minimum label: {min_label}')
+    # print(f'Maximum label: {max_label}')
+    # print(f'Minimum third element in rel_annotations: {min_rel_anno}')
+    # print(f'Maximum third element in rel_annotations: {max_rel_anno}')
+
+    # assert(0)
+
 
     for samples, targets in metric_logger.log_every(data_loader, print_freq, header):
 

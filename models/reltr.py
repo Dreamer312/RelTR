@@ -157,12 +157,12 @@ class SetCriterion(nn.Module):
             losses: list of all the losses to be applied. See get_loss for list of available losses.
         """
         super().__init__()
-        self.num_classes = num_classes
+        self.num_classes = num_classes #151
         self.matcher = matcher
-        self.weight_dict = weight_dict
+        self.weight_dict = weight_dict  #{ce:1, bbox:5, giou:2, rel:1    剩下五层也是一样的} 共4*6层  24个标量
         self.eos_coef = eos_coef
         self.losses = losses
-        empty_weight = torch.ones(self.num_classes + 1)
+        empty_weight = torch.ones(self.num_classes + 1) # torch.Size([152]) 
         empty_weight[-1] = self.eos_coef
         self.register_buffer('empty_weight', empty_weight)
 
@@ -176,14 +176,58 @@ class SetCriterion(nn.Module):
         """
         assert 'pred_logits' in outputs
 
-        pred_logits = outputs['pred_logits']
+        pred_logits = outputs['pred_logits'] #torch.Size([bs, 100, 152])
 
-        idx = self._get_src_permutation_idx(indices[0])
+
+        idx = self._get_src_permutation_idx(indices[0]) 
+        # 两个都是47size 说明47个物体属于第几个图片
+        #(tensor([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2,
+        # 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3]), 
+        # tensor([ 4, 24, 27, 28, 46, 53, 60, 63, 68, 74, 87, 96,  3,  6, 31, 37, 42, 45,
+        # 63, 65, 68, 85,  2, 11, 15, 20, 23, 27, 32, 34, 58, 59, 66, 90, 91, 95,
+        #  1, 11, 21, 28, 30, 34, 38, 40, 42, 91, 92]))
+
         target_classes_o = torch.cat([t["labels"][J] for t, (_, J) in zip(targets, indices[0])])
+
+        # target_classes torch.Size([bs, 100])    全151的tensor
         target_classes = torch.full(pred_logits.shape[:2], self.num_classes, dtype=torch.int64, device=pred_logits.device)
         target_classes[idx] = target_classes_o
+        # tensor([[151, 151, 151, 151, 147, 151, 151, 151, 151, 151, 151, 151, 151, 151,
+        #  151, 151, 151, 151, 151, 151, 151, 151, 151, 151,  95, 151, 151, 127,
+        #   90, 151, 151, 151, 151, 151, 151, 151, 151, 151, 151, 151, 151, 151,
+        #  151, 151, 151, 151, 145, 151, 151, 151, 151, 151, 151,  76, 151, 151,
+        #  151, 151, 151, 151, 144, 151, 151, 147, 151, 151, 151, 151,  22, 151,
+        #  151, 151, 151, 151, 130, 151, 151, 151, 151, 151, 151, 151, 151, 151,
+        #  151, 151, 151,  95, 151, 151, 151, 151, 151, 151, 151, 151,  77, 151,
+        #  151, 151],
+        # [151, 151, 151, 121, 151, 151,  82, 151, 151, 151, 151, 151, 151, 151,
+        #  151, 151, 151, 151, 151, 151, 151, 151, 151, 151, 151, 151, 151, 151,
+        #  151, 151, 151,   8, 151, 151, 151, 151, 151,   8, 151, 151, 151, 151,
+        #   40, 151, 151, 121, 151, 151, 151, 151, 151, 151, 151, 151, 151, 151,
+        #  151, 151, 151, 151, 151, 151, 151,  82, 151,  89, 151, 151,  43, 151,
+        #  151, 151, 151, 151, 151, 151, 151, 151, 151, 151, 151, 151, 151, 151,
+        #  151,  84, 151, 151, 151, 151, 151, 151, 151, 151, 151, 151, 151, 151,
+        #  151, 151],
+        # [151, 151,  17, 151, 151, 151, 151, 151, 151, 151, 151,  78, 151, 151,
+        #  151,  77, 151, 151, 151, 151,  58, 151, 151,  20, 151, 151, 151, 111,
+        #  151, 151, 151, 151, 111, 151,  17, 151, 151, 151, 151, 151, 151, 151,
+        #  151, 151, 151, 151, 151, 151, 151, 151, 151, 151, 151, 151, 151, 151,
+        #  151, 151,  72,  72, 151, 151, 151, 151, 151, 151,  57, 151, 151, 151,
+        #  151, 151, 151, 151, 151, 151, 151, 151, 151, 151, 151, 151, 151, 151,
+        #  151, 151, 151, 151, 151, 151,  78,  53, 151, 151, 151, 126, 151, 151,
+        #  151, 151],
+        # [151, 103, 151, 151, 151, 151, 151, 151, 151, 151, 151,  61, 151, 151,
+        #  151, 151, 151, 151, 151, 151, 151,  57, 151, 151, 151, 151, 151, 151,
+        #   40, 151,  58, 151, 151, 151,  44, 151, 151, 151, 103, 151, 111, 151,
+        #   92, 151, 151, 151, 151, 151, 151, 151, 151, 151, 151, 151, 151, 151,
+        #  151, 151, 151, 151, 151, 151, 151, 151, 151, 151, 151, 151, 151, 151,
+        #  151, 151, 151, 151, 151, 151, 151, 151, 151, 151, 151, 151, 151, 151,
+        #  151, 151, 151, 151, 151, 151, 151,  78, 103, 151, 151, 151, 151, 151,
+        #  151, 151]], device='cuda:0')
 
-        sub_logits = outputs['sub_logits']
+
+
+        sub_logits = outputs['sub_logits'] #torch.Size([bs, 200, 152])
         obj_logits = outputs['obj_logits']
 
         rel_idx = self._get_src_permutation_idx(indices[1])
@@ -302,13 +346,36 @@ class SetCriterion(nn.Module):
                       The expected keys in each dict depends on the losses applied, see each loss' doc
         """
         outputs_without_aux = {k: v for k, v in outputs.items() if k != 'aux_outputs'}
+        #outputs_without_aux:{
+        # pred_logits: torch.Size([bs, 100, 152])
+        # pred_boxes: torch.Size([bs, 100, 4])
+        # sub_logits: torch.Size([bs, 200, 152])
+        # sub_boxes:torch.Size([bs, 200, 4])
+        # obj_logits: torch.Size([bs, 200, 152])
+        # obj_boxes: torch.Size([bs, 200, 4])
+        # rel_logits: torch.Size([bs, 200, 52])
+        # }
 
         # Retrieve the matching between the outputs of the last layer and the targets
         indices = self.matcher(outputs_without_aux, targets)
         self.indices = indices
+        #indices: tuple          0是entity的匹配         1是三元组匹配      2是sub_weight    3是obj_weight
+        # 0:[(tensor([ 4, 24, 27, 28, 46, 53, 60, 63, 68, 74, 87, 96]), tensor([11,  5,  6,  3,  9,  1,  8, 10,  0,  7,  4,  2])), 
+        # (tensor([ 3,  6, 31, 37, 42, 45, 63, 65, 68, 85]), tensor([3, 4, 0, 1, 2, 8, 5, 7, 9, 6])), 
+        # (tensor([ 2, 11, 15, 20, 23, 27, 32, 34, 58, 59, 66, 90, 91, 95]), tensor([ 0, 13,  6,  5,  1,  8,  9, 11,  2, 12,  4,  7,  3, 10])), 
+        # (tensor([ 1, 11, 21, 28, 30, 34, 38, 40, 42, 91, 92]), tensor([ 8,  4,  2,  0,  3,  1,  9, 10,  6,  5,  7]))]
+        #
+        # 1:[(tensor([ 28,  63,  70, 122]), tensor([1, 3, 0, 2])), 
+        # (tensor([ 23,  68,  70, 102, 112, 126, 130, 148, 186]), tensor([5, 3, 0, 6, 1, 4, 8, 2, 7])), 
+        # (tensor([ 27,  29,  51,  61,  83, 153, 165, 188]), tensor([3, 0, 6, 7, 5, 4, 1, 2])), 
+        # (tensor([ 14,  65,  82,  97, 115, 148, 157, 165, 169, 198]), tensor([4, 8, 9, 1, 6, 7, 3, 2, 0, 5]))]
+        #
+        # 2:torch.Size([bs, 200])
+        # 3:torch.Size([bs, 200])
+
 
         # Compute the average number of target boxes accross all nodes, for normalization purposes
-        num_boxes = sum(len(t["labels"])+len(t["rel_annotations"]) for t in targets)
+        num_boxes = sum(len(t["labels"])+len(t["rel_annotations"]) for t in targets) #78=47+31
         num_boxes = torch.as_tensor([num_boxes], dtype=torch.float, device=next(iter(outputs.values())).device)
         if is_dist_avail_and_initialized():
             torch.distributed.all_reduce(num_boxes)

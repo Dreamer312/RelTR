@@ -123,6 +123,7 @@ def main(args):
 
     model, criterion, postprocessors = build_model(args)
     model.to(device)
+    print(model)
 
     model_without_ddp = model
     if args.distributed:

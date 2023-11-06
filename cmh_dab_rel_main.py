@@ -12,7 +12,6 @@ from typing import Optional
 import datasets
 from models.DABRelTR.util import misc as utils  #import DABRelTR.util.misc 
 from .datasets import build_dataset, get_coco_api_from_dataset
-from models.DABRelTR import build_DABRelTR
 
 
 def get_args_parser():

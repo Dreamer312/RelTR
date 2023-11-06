@@ -52,6 +52,80 @@ def gen_sineembed_for_position(pos_tensor, d_model=256):
     return pos
 
 
+class Transformer(nn.Module):
+
+    def __init__(self, d_model=512, nhead=8, num_queries=300, num_encoder_layers=6,
+                 num_decoder_layers=6, dim_feedforward=2048, dropout=0.1,
+                 activation="relu", normalize_before=False,
+                 return_intermediate_dec=False, query_dim=4,
+                 keep_query_pos=False, query_scale_type='cond_elewise',
+                 num_patterns=0,
+                 modulate_hw_attn=True,
+                 bbox_embed_diff_each_layer=False,
+                 ):
+
+        super().__init__()
+
+        encoder_layer = TransformerEncoderLayer(d_model, nhead, dim_feedforward,
+                                                dropout, activation, normalize_before)
+        encoder_norm = nn.LayerNorm(d_model) if normalize_before else None
+        self.encoder = TransformerEncoder(encoder_layer, num_encoder_layers, encoder_norm)
+
+        # decoder_layer = TransformerDecoderLayer(d_model, nhead, dim_feedforward,
+        #                                         dropout, activation, normalize_before, keep_query_pos=keep_query_pos)
+        # decoder_norm = nn.LayerNorm(d_model)
+        # self.decoder = TransformerDecoder(decoder_layer, num_decoder_layers, decoder_norm,
+        #                                   return_intermediate=return_intermediate_dec,
+        #                                   d_model=d_model, query_dim=query_dim, keep_query_pos=keep_query_pos, query_scale_type=query_scale_type,
+        #                                   modulate_hw_attn=modulate_hw_attn,
+        #                                   bbox_embed_diff_each_layer=bbox_embed_diff_each_layer)
+
+        self._reset_parameters()
+        assert query_scale_type in ['cond_elewise', 'cond_scalar', 'fix_elewise']
+
+        self.d_model = d_model
+        self.nhead = nhead
+        self.dec_layers = num_decoder_layers
+        self.num_queries = num_queries
+        self.num_patterns = num_patterns
+        if not isinstance(num_patterns, int):
+            Warning("num_patterns should be int but {}".format(type(num_patterns)))
+            self.num_patterns = 0
+        if self.num_patterns > 0:
+            self.patterns = nn.Embedding(self.num_patterns, d_model)
+
+    def _reset_parameters(self):
+        for p in self.parameters():
+            if p.dim() > 1:
+                nn.init.xavier_uniform_(p)
+
+    def forward(self, src, mask, refpoint_embed, pos_embed):
+        # flatten NxCxHxW to HWxNxC
+        bs, c, h, w = src.shape #torch.Size([bs, 256, 24, 37])
+        src = src.flatten(2).permute(2, 0, 1) # torch.Size([888, bs, 256])
+        pos_embed = pos_embed.flatten(2).permute(2, 0, 1) # torch.Size([888, bs, 256])
+        refpoint_embed = refpoint_embed.unsqueeze(1).repeat(1, bs, 1) #[300, bs, 4]
+        mask = mask.flatten(1)        
+        memory = self.encoder(src, src_key_padding_mask=mask, pos=pos_embed) ## torch.Size([888, bs, 256])
+
+        # query_embed = gen_sineembed_for_position(refpoint_embed)
+        num_queries = refpoint_embed.shape[0] #300
+        if self.num_patterns == 0:
+            tgt = torch.zeros(num_queries, bs, self.d_model, device=refpoint_embed.device) #torch.Size([300, bs, 256])
+        else:
+            tgt = self.patterns.weight[:, None, None, :].repeat(1, self.num_queries, bs, 1).flatten(0, 1) # n_q*n_pat, bs, d_model
+            refpoint_embed = refpoint_embed.repeat(self.num_patterns, 1, 1) # n_q*n_pat, bs, d_model
+            # import ipdb; ipdb.set_trace()
+
+        # hs torch.Size([6, bs, 300, 256]) 6应该是6层
+        # references torch.Size([6, bs, 300, 4])
+        # hs, references = self.decoder(tgt, memory, memory_key_padding_mask=mask,
+        #                   pos=pos_embed, refpoints_unsigmoid=refpoint_embed)
+        # return hs, references
+
+        return None
+
+
 
 class TransformerEncoder(nn.Module):
 
@@ -118,10 +192,27 @@ class TransformerEncoderLayer(nn.Module):
     
 
 
+def build_transformer(args):
+    return Transformer(
+        d_model=args.hidden_dim,
+        dropout=args.dropout,
+        nhead=args.nheads,
+        num_queries=args.num_queries,           # DAB独有 其他都一样
+        dim_feedforward=args.dim_feedforward,
+        num_encoder_layers=args.enc_layers,
+        num_decoder_layers=args.dec_layers,
+        normalize_before=args.pre_norm,
+        return_intermediate_dec=True,
+        query_dim=4,   #DAB独有
+        activation=args.transformer_activation, #DAB独有
+        num_patterns=args.num_patterns, #DAB独有
+    )
+
 
 
 def _get_clones(module, N):
     return nn.ModuleList([copy.deepcopy(module) for i in range(N)])
+
 
 def _get_activation_fn(activation):
     """Return an activation function given a string"""

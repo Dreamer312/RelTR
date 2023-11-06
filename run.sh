@@ -116,7 +116,7 @@
 
 #7  zju调试
 #====================================================================
-export CUDA_VISIBLE_DEVICES=1,2,4,5
+export CUDA_VISIBLE_DEVICES=1
 # python -m torch.distributed.launch  \
 #     --nproc_per_node=2 \
 #     --use_env cmh_main.py \
@@ -126,14 +126,14 @@ export CUDA_VISIBLE_DEVICES=1,2,4,5
 #     --batch_size=4 \
 #     --output_dir checkpoint_zju_debug \
 
-torchrun --nproc_per_node=4 \
+torchrun --nproc_per_node=1 \
     --standalone \
     --nnodes=1 \
-    cmh_main.py \
+    main.py \
         --dataset vg \
         --img_folder data/vg/images/ \
         --ann_path data/vg/ \
-        --batch_size=4 \
+        --batch_size=1 \
         --output_dir checkpoint_zju_debug \
 
 
