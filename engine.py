@@ -68,7 +68,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
     for samples, targets in metric_logger.log_every(data_loader, print_freq, header):
 
 
-        samples = samples.to(device) # torch.Size([bs, 3, 866, 1081])  mask. torch.Size([bs, 866, 1081])
+        samples = samples.to(device) # torch.Size([bs, 3, 800, 1280])  mask. torch.Size([bs, 800, 1280])
 
         # 0:{'boxes': tensor([[0.4970, 0.3808, 0.9140, 0.5694],
         # [0.5310, 0.1228, 0.1740, 0.0747],

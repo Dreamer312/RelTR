@@ -14,6 +14,8 @@ from datasets.coco_eval import CocoEvaluator
 
 from tqdm import tqdm
 from models.DABRelTR.util import misc as utils
+import os
+os.environ['TORCH_DISTRIBUTED_DEBUG'] = 'INFO'
 
 #暂时是rel的uitl还没有用到
 # from util.box_ops import rescale_bboxes
@@ -24,7 +26,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
                     data_loader: Iterable, optimizer: torch.optim.Optimizer,
                     device: torch.device, epoch: int, max_norm: float = 0):
     model.train()
-    criterion.train()
+    # criterion.train()
     metric_logger = utils.MetricLogger(delimiter="  ")
     metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
     metric_logger.add_meter('class_error', utils.SmoothedValue(window_size=1, fmt='{value:.2f}'))
@@ -33,7 +35,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
     metric_logger.add_meter('rel_error', utils.SmoothedValue(window_size=1, fmt='{value:.2f}'))
 
     header = 'Epoch: [{}]'.format(epoch)
-    print_freq = 500
+    print_freq = 10
 
     is_main_process = not is_initialized() or get_rank() == 0
 
@@ -44,43 +46,59 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
     for samples, targets in metric_logger.log_every(data_loader, print_freq, header):
 
 
-        samples = samples.to(device) # torch.Size([bs, 3, 866, 1081])  mask. torch.Size([bs, 866, 1081])
-
-        # 0:{'boxes': tensor([[0.4970, 0.3808, 0.9140, 0.5694],
-        # [0.5310, 0.1228, 0.1740, 0.0747],
-        # [0.3780, 0.4448, 0.0960, 0.0498],
-        # [0.2710, 0.0907, 0.1540, 0.1032],
-        # [0.5330, 0.4591, 0.8980, 0.7189],
-        # [0.4580, 0.0783, 0.1880, 0.1352],
-        # [0.2520, 0.4039, 0.1040, 0.2313],
-        # [0.7370, 0.7224, 0.1740, 0.1993],
-        # [0.7250, 0.7082, 0.2620, 0.2278],
-        # [0.4880, 0.3256, 0.1120, 0.0819],
-        # [0.4320, 0.4751, 0.5560, 0.1815],
-        # [0.1010, 0.4288, 0.0460, 0.1530]]), 'labels': tensor([ 22,  76,  77,  90,  95,  95, 127, 130, 144, 145, 147, 147]), 'image_id': tensor([2389878]), 'area': tensor([342470.6562,   8593.3428,   3204.3765,  10581.4590, 424867.5625,
-        #  16803.0957,  16003.1699,  22973.2734,  39621.9961,   6160.8228,
-        #  66786.6875,   4771.4800]), 'iscrowd': tensor([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]), 'orig_size': tensor([281, 500]), 'size': tensor([ 608, 1081]), 'rel_annotations': tensor([[ 2,  4, 29],
-        # [ 4,  6, 20],
-        # [ 4,  8, 20],
-        # [ 4,  9, 20]])}
-
-        # 3:{boxes:[11,4], labels:[11], image_id:[2392873], area:[11], iscrowd, orig_size:[375,500], size:[704,938], relation:torch.Size([10, 3]) }
-
+        samples = samples.to(device) # torch.Size([4, 3, h:800, w:1280]))  mask. torch.Size([bs, 800, 1280])
 
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
+        #targets是list，长度是bs
+        # 0:{'boxes': tensor([[0.1987, 0.7031, 0.3291, 0.2057],
+    #     [0.2383, 0.5202, 0.4180, 0.9596],
+    #     [0.9409, 0.8132, 0.1182, 0.1029],
+    #     [0.8496, 0.8236, 0.1191, 0.0768],
+    #     [0.3140, 0.1445, 0.1982, 0.2057],
+    #     [0.3022, 0.6758, 0.1182, 0.1484],
+    #     [0.3291, 0.6549, 0.1152, 0.1484],
+    #     [0.4512, 0.6107, 0.1582, 0.1016],
+    #     [0.5903, 0.3848, 0.0205, 0.2279],
+    #     [0.1509, 0.1068, 0.1475, 0.0469],
+    #     [0.2354, 0.6283, 0.3398, 0.7435],
+    #     [0.5806, 0.3783, 0.1475, 0.2565],
+    #     [0.2549, 0.4629, 0.0586, 0.1107],
+    #     [0.2632, 0.5189, 0.4658, 0.9544]], device='cuda:0'), 'labels': tensor([  3,  20,  49,  49,  57,  58,  59,  97,  99, 105, 111, 115,  77,  78],
+    #    device='cuda:0'), 'image_id': tensor([498334], device='cuda:0'), 'area': tensor([ 69330.7344, 410723.9688,  12446.6152,   9372.3965,  41763.0234,
+    #      17960.9375,  17515.6250,  16453.1250,   4785.1562,   7078.1250,
+    #     258734.3906,  38733.0742,   6640.6250, 455261.7188], device='cuda:0'), 'iscrowd': tensor([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], device='cuda:0'), 'orig_size': tensor([ 768, 1024], device='cuda:0'), 'size': tensor([ 800, 1280], device='cuda:0'), 'rel_annotations': tensor([[ 1,  0, 20],
+    #     [11,  8, 50],
+    #     [12, 10, 31],
+    #     [13,  5, 20],
+    #     [13,  7, 21]], device='cuda:0')}
+    #     ............
+    #     3:{{'boxes': size[6,4], 'labels': tensor([ 22,  26,  64, 130, 142,  26]), 'image_id': tensor([498337]), 'area': tensor([106005.2734,  23460.5098,  39151.1641,   3074.5740,  19535.8594,
+        #   25470.5020]), 'iscrowd': tensor([0, 0, 0, 0, 0, 0], device='cuda:0'), 'orig_size': tensor([276, 467], device='cuda:0'), 'size': tensor([ 800, 1280], device='cuda:0'), 
+        # 'rel_annotations': tensor([[ 0,  2, 29],[ 1,  0, 29], [ 2,  0, 29]], device='cuda:0')}}
+
+
+
+
+
+
 
         outputs = model(samples)
         #outputs:{
-        # pred_logits: torch.Size([bs, 100, 152])
-        # pred_boxes: torch.Size([bs, 100, 4])
-        # sub_logits: torch.Size([bs, 200, 152])
-        # sub_boxes:torch.Size([bs, 200, 4])
-        # obj_logits: torch.Size([bs, 200, 152])
-        # obj_boxes: torch.Size([bs, 200, 4])
-        # rel_logits: torch.Size([bs, 200, 52])
+        # pred_logits: torch.Size([bs, 300, 151])
+        # pred_boxes: torch.Size([bs, 300, 4])
+        # sub_logits: torch.Size([bs, 600, 151])
+        # sub_boxes:torch.Size([bs, 600, 4])
+        # obj_logits: torch.Size([bs, 600, 151])
+        # obj_boxes: torch.Size([bs, 600, 4])
+        # rel_logits: torch.Size([bs, 600, 51])
         #字典队列，长度5[{...},{内容和上面一样}]
         # }
+
         loss_dict = criterion(outputs, targets)
+
+
+
+
         #{'loss_ce': tensor(2.9685, device='cuda:0', grad_fn=<DivBackward0>), 
         # 'class_error': tensor(89.3617, device='cuda:0'), 
         # 'sub_error': tensor(93.5484, device='cuda:0'), 
@@ -135,6 +153,10 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
         optimizer.step()
 
+        # for name, param in model.named_parameters():
+        #     if param.grad is None:
+        #         print(name, 'has no grad')
+        # assert(0)
         metric_logger.update(loss=loss_value, **loss_dict_reduced_scaled, **loss_dict_reduced_unscaled)
         metric_logger.update(class_error=loss_dict_reduced['class_error'])
         metric_logger.update(sub_error=loss_dict_reduced['sub_error'])

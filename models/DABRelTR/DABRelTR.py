@@ -10,6 +10,10 @@ from .util.misc import (NestedTensor, nested_tensor_from_tensor_list,
                        is_dist_avail_and_initialized, inverse_sigmoid)
 from .backbone import build_backbone
 from .dabrel_transformer import build_transformer
+from .matcher import build_matcher
+from .util import box_ops
+
+
 
 def sigmoid_focal_loss(inputs, targets, num_boxes, alpha: float = 0.25, gamma: float = 2):
     """
@@ -41,6 +45,8 @@ def sigmoid_focal_loss(inputs, targets, num_boxes, alpha: float = 0.25, gamma: f
 
 
 
+
+
 class MLP(nn.Module):
     """ Very simple multi-layer perceptron (also called FFN)"""
 
@@ -62,7 +68,9 @@ class DABRelTR(nn.Module):
     def __init__(self, backbone, 
                     transformer, 
                     num_classes,
-                    num_queries, 
+                    num_rel_classes,
+                    num_queries,
+                    num_triplets, 
                     num_dec_layers,
                     aux_loss=False, 
                     iter_update=True,
@@ -89,13 +97,14 @@ class DABRelTR(nn.Module):
         super().__init__()
         self.num_queries = num_queries
         self.transformer = transformer
-        hidden_dim = transformer.d_model
+        hidden_dim = 256 if transformer==None else transformer.d_model
         self.input_proj = nn.Conv2d(backbone.num_channels, hidden_dim, kernel_size=1)
         self.backbone = backbone
         self.aux_loss = aux_loss
         #=============================================================================
 
         #=============================DAB================================================
+
         self.class_embed = nn.Linear(hidden_dim, num_classes)
         self.bbox_embed_diff_each_layer = bbox_embed_diff_each_layer
         if bbox_embed_diff_each_layer:
@@ -103,12 +112,23 @@ class DABRelTR(nn.Module):
         else:
             self.bbox_embed = MLP(hidden_dim, hidden_dim, 4, 3)
         
-
+        self.iter_update = iter_update
+        #默认是True
+        if self.iter_update:
+            self.transformer.decoder.bbox_embed = self.bbox_embed
         # setting query dim
         self.query_dim = query_dim
         assert query_dim in [2, 4]
 
         self.refpoint_embed = nn.Embedding(num_queries, query_dim) #Embedding(300, 4)
+
+                
+        #===========================我加的=========================================
+        #另外的600个subject和600个object的框子
+        self.refpoint_embed_triplets = nn.Embedding(num_triplets, query_dim) #Embedding(600, 4)
+
+
+
         self.random_refpoints_xy = random_refpoints_xy
         if random_refpoints_xy:
             # import ipdb; ipdb.set_trace()
@@ -116,14 +136,35 @@ class DABRelTR(nn.Module):
             self.refpoint_embed.weight.data[:, :2] = inverse_sigmoid(self.refpoint_embed.weight.data[:, :2])
             self.refpoint_embed.weight.data[:, :2].requires_grad = False
 
-        self.iter_update = iter_update
-        #默认是True
-        if self.iter_update:
-            self.transformer.decoder.bbox_embed = self.bbox_embed
+            self.refpoint_embed_triplets.weight.data[:, :2].uniform_(0,1)
+            self.refpoint_embed_triplets.weight.data[:, :2] = inverse_sigmoid(self.refpoint_embed.weight.data[:, :2])
+            self.refpoint_embed_triplets.weight.data[:, :2].requires_grad = False
 
-        # init prior_prob setting for focal loss
+        self.bbox_embed_sub = MLP(hidden_dim, hidden_dim, 4, 3)
+        self.bbox_embed_obj = MLP(hidden_dim, hidden_dim, 4, 3)
+        nn.init.constant_(self.bbox_embed_sub.layers[-1].weight.data, 0)
+        nn.init.constant_(self.bbox_embed_sub.layers[-1].bias.data, 0)
+        nn.init.constant_(self.bbox_embed_obj.layers[-1].weight.data, 0)
+        nn.init.constant_(self.bbox_embed_obj.layers[-1].bias.data, 0)
+
+        self.transformer.decoder.bbox_embed_sub = self.bbox_embed_sub
+        self.transformer.decoder.bbox_embed_obj = self.bbox_embed_obj
+
+
         prior_prob = 0.01
         bias_value = -math.log((1 - prior_prob) / prior_prob)
+
+        self.sub_class_embed = nn.Linear(hidden_dim, num_classes)
+        self.obj_class_embed = nn.Linear(hidden_dim, num_classes)
+        self.rel_class_embed = MLP(hidden_dim*2+128, hidden_dim, num_rel_classes, 2)  # num_rel_classes==51
+
+        self.sub_class_embed.bias.data = torch.ones(num_classes) * bias_value
+        self.obj_class_embed.bias.data = torch.ones(num_classes) * bias_value
+        self.rel_class_embed.layers[-1].bias.data = torch.ones(num_rel_classes) * bias_value
+        #===========================我加的=========================================
+    
+        # init prior_prob setting for focal loss
+        
         self.class_embed.bias.data = torch.ones(num_classes) * bias_value
 
         # import ipdb; ipdb.set_trace()
@@ -135,19 +176,20 @@ class DABRelTR(nn.Module):
         else:
             nn.init.constant_(self.bbox_embed.layers[-1].weight.data, 0)
             nn.init.constant_(self.bbox_embed.layers[-1].bias.data, 0)
+
         #=============================================================================
 
         #=============================Rel================================================
-        self.entity_embed = nn.Embedding(num_entities, hidden_dim*2)  #torch.Size([100, 512])
-        self.triplet_embed = nn.Embedding(num_triplets, hidden_dim*3) #triplet_embed torch.Size([200, 768])
+        # self.entity_embed = nn.Embedding(num_entities, hidden_dim*2)  #torch.Size([100, 512])
+        # self.triplet_embed = nn.Embedding(num_triplets, hidden_dim*3) #triplet_embed torch.Size([200, 768])
         self.so_embed = nn.Embedding(2, hidden_dim) # subject and object encoding [2,256]
 
         # entity prediction
         # 150类的话 索引是0-149   151类的话索引是0-150 实际只用1-150 0不用
         # self.entity_class_embed 进去是256  出来是152
-        self.entity_class_embed = nn.Linear(hidden_dim, num_classes + 1)  # 传进来的时候就是num_classes 151   label是从1开始的
+        # self.entity_class_embed = nn.Linear(hidden_dim, num_classes + 1)  # 传进来的时候就是num_classes 151   label是从1开始的
 
-        self.entity_bbox_embed = MLP(hidden_dim, hidden_dim, 4, 3)
+        # self.entity_bbox_embed = MLP(hidden_dim, hidden_dim, 4, 3)
 
         # mask head
         self.so_mask_conv = nn.Sequential(torch.nn.Upsample(size=(28, 28)),
@@ -164,22 +206,420 @@ class DABRelTR(nn.Module):
 
         # predicate classification
         # 640 256 256 52
-        self.rel_class_embed = MLP(hidden_dim*2+128, hidden_dim, num_rel_classes + 1, 2)  # num_rel_classes==51
-
-        # subject/object label classfication and box regression
-        self.sub_class_embed = nn.Linear(hidden_dim, num_classes + 1)
-        self.sub_bbox_embed = MLP(hidden_dim, hidden_dim, 4, 3)
-        self.obj_class_embed = nn.Linear(hidden_dim, num_classes + 1)
-        self.obj_bbox_embed = MLP(hidden_dim, hidden_dim, 4, 3)
+        
         #=============================================================================
 
     def forward(self, samples: NestedTensor):
         if isinstance(samples, (list, torch.Tensor)):
             samples = nested_tensor_from_tensor_list(samples)
-        features, pos = self.backbone(samples)
+        features, pos = self.backbone(samples)  
+        src, mask = features[-1].decompose() # src torch.Size([bs, 2048, 25, 40])   torch.Size([bs, 25, 40])
+
+        assert mask is not None
+        #=============================DAB================================================
+        # default pipeline
+        embedweight = self.refpoint_embed.weight #[300,4]
+
+        #result:{hs:[6,bs,300,256]
+        #        reference:[6,bs,300,4]
+        #        hs_sub:[6,bs,600,256]
+        #        reference_sub:[6,bs,600,4]
+        #        hs_obj:[6,bs,600,256]
+        #        reference_obj:[6,bs,600,4]
+        #        so_mask:torch.Size([6, bs, 600, 2, 25, 40])    
+        # }
+        result = self.transformer(self.input_proj(src), 
+                                         mask, embedweight, 
+                                         self.refpoint_embed_triplets.weight, 
+                                         self.so_embed.weight, 
+                                         pos[-1])
+        # hs torch.Size([6, bs, 300, 256]) 6应该是6层
+        # references torch.Size([6, bs, 300, 4])
+        
+        hs = result["hs"]
+        reference = result["reference"]
+        if not self.bbox_embed_diff_each_layer:
+            reference_before_sigmoid = inverse_sigmoid(reference) # torch.Size([6, bs, 300, 4])
+            tmp = self.bbox_embed(hs) #torch.Size([6, bs, 300, 4])
+            tmp[..., :self.query_dim] += reference_before_sigmoid
+            outputs_coord = tmp.sigmoid() # torch.Size([6, bs, 300, 4])
+        else:
+            reference_before_sigmoid = inverse_sigmoid(reference)
+            outputs_coords = []
+            for lvl in range(hs.shape[0]):
+                tmp = self.bbox_embed[lvl](hs[lvl])
+                tmp[..., :self.query_dim] += reference_before_sigmoid[lvl]
+                outputs_coord = tmp.sigmoid()
+                outputs_coords.append(outputs_coord)
+            outputs_coord = torch.stack(outputs_coords)
 
 
-        return
+
+        #===========================我加的=========================================
+        hs_sub = result["hs_sub"]
+        reference_sub = result["reference_sub"]
+        reference_sub_before_sigmoid = inverse_sigmoid(reference_sub)
+        tmp_sub = self.bbox_embed_sub(hs_sub)
+        tmp_sub[..., :self.query_dim] += reference_sub_before_sigmoid
+        outputs_coord_sub = tmp_sub.sigmoid() #[6,bs,600,4]
+
+
+        hs_obj = result["hs_obj"]
+        reference_obj = result["reference_obj"]
+        reference_obj_before_sigmoid = inverse_sigmoid(reference_obj)
+        tmp_obj = self.bbox_embed_obj(hs_obj)
+        tmp_obj[..., :self.query_dim] += reference_obj_before_sigmoid
+        outputs_coord_obj = tmp_obj.sigmoid() #[6,bs,600,4]
+
+
+        so_masks = result["so_masks"]
+        so_masks = so_masks.detach()
+        so_masks = so_masks.view(-1, 2, src.shape[-2],src.shape[-1])
+        so_masks = self.so_mask_conv(so_masks) 
+        so_masks = so_masks.view(hs_sub.shape[0], hs_sub.shape[1], hs_sub.shape[2],-1) # [6,bs,600,2048]
+        so_masks = self.so_mask_fc(so_masks) # [6,bs,600,128]
+
+        outputs_class_sub = self.sub_class_embed(hs_sub) # [6,bs,600,151]
+        outputs_class_obj = self.obj_class_embed(hs_obj) # [6,bs,600,151]
+        outputs_class_rel = self.rel_class_embed(torch.cat((hs_sub, hs_obj, so_masks), dim=-1)) # torch.Size([6, bs, 600, 51])
+        #===========================我加的=========================================
+
+        outputs_class = self.class_embed(hs)  # torch.Size([6, bs, 300, 151])
+
+
+
+        out = {'pred_logits': outputs_class[-1], 'pred_boxes': outputs_coord[-1],
+               'sub_logits': outputs_class_sub[-1], 'sub_boxes': outputs_coord_sub[-1],
+               'obj_logits': outputs_class_obj[-1], 'obj_boxes': outputs_coord_obj[-1],
+               'rel_logits': outputs_class_rel[-1]
+               }
+
+
+    #     if self.aux_loss:      #默认使用
+    #         out['aux_outputs'] = self._set_aux_loss(outputs_class, outputs_coord)
+    #     # return out
+    # #=============================DAB================================================
+
+    # #=============================REL================================================
+
+
+    #     outputs_class_rel = self.rel_class_embed(torch.cat((hs_sub, hs_obj, so_masks), dim=-1)) # torch.Size([6, bs, 200, 52])
+
+    #     out = {'pred_logits': outputs_class[-1], 'pred_boxes': outputs_coord[-1],
+    #            'sub_logits': outputs_class_sub[-1], 'sub_boxes': outputs_coord_sub[-1],
+    #            'obj_logits': outputs_class_obj[-1], 'obj_boxes': outputs_coord_obj[-1],
+    #            'rel_logits': outputs_class_rel[-1]}
+        if self.aux_loss:
+            out['aux_outputs'] = self._set_aux_loss(outputs_class, outputs_coord, outputs_class_sub, outputs_coord_sub,
+                                                    outputs_class_obj, outputs_coord_obj, outputs_class_rel)
+        return out
+
+    @torch.jit.unused
+    def _set_aux_loss(self, outputs_class, outputs_coord, outputs_class_sub, outputs_coord_sub,
+                      outputs_class_obj, outputs_coord_obj, outputs_class_rel):
+        # this is a workaround to make torchscript happy, as torchscript
+        # doesn't support dictionary with non-homogeneous values, such
+        # as a dict having both a Tensor and a list.
+        return [{'pred_logits': a, 'pred_boxes': b, 'sub_logits': c, 'sub_boxes': d, 'obj_logits': e, 'obj_boxes': f,
+                 'rel_logits': g}
+                for a, b, c, d, e, f, g in zip(outputs_class[:-1], outputs_coord[:-1], outputs_class_sub[:-1],
+                                               outputs_coord_sub[:-1], outputs_class_obj[:-1], outputs_coord_obj[:-1],
+                                               outputs_class_rel[:-1])]
+    
+    #=============================REL================================================
+
+
+
+
+class SetCriterion(nn.Module):
+    def __init__(self, num_classes, num_rel_classes, matcher, weight_dict, eos_coef, focal_alpha, losses):
+        super().__init__()
+        self.num_classes = num_classes #151
+        self.matcher = matcher
+        self.weight_dict = weight_dict      
+        self.losses = losses
+
+        #? DAB
+        self.focal_alpha = focal_alpha
+
+        #! rel
+        # self.eos_coef = eos_coef 
+        # empty_weight = torch.ones(self.num_classes + 1) # torch.Size([152]) 
+        # empty_weight[-1] = self.eos_coef
+        # self.register_buffer('empty_weight', empty_weight)
+
+        self.num_rel_classes = 51 if num_classes == 151 else 31 # Using entity class numbers to adapt rel class numbers
+        # empty_weight_rel = torch.ones(num_rel_classes+1)
+        # empty_weight_rel[-1] = self.eos_coef
+        # self.register_buffer('empty_weight_rel', empty_weight_rel)
+        #! rel
+
+    def loss_labels(self, outputs, targets, indices, num_boxes, log=True):
+            """Entity/subject/object Classification loss with focal loss"""
+            assert 'pred_logits' in outputs
+
+            # Entity logits and their indices
+            pred_logits = outputs['pred_logits']
+            idx = self._get_src_permutation_idx(indices[0]) 
+            target_classes_o = torch.cat([t["labels"][J] for t, (_, J) in zip(targets, indices[0])])
+
+            # Prepare target classes for entities
+            target_classes = torch.full(pred_logits.shape[:2], self.num_classes, dtype=torch.int64, device=pred_logits.device)
+            target_classes[idx] = target_classes_o
+
+            # Subject and Object logits
+            sub_logits = outputs['sub_logits']
+            obj_logits = outputs['obj_logits']
+
+            # Subject and Object indices and classes
+            rel_idx = self._get_src_permutation_idx(indices[1])
+            target_rels_classes_o = torch.cat([t["labels"][t["rel_annotations"][J, 0]] for t, (_, J) in zip(targets, indices[1])])
+            target_relo_classes_o = torch.cat([t["labels"][t["rel_annotations"][J, 1]] for t, (_, J) in zip(targets, indices[1])])
+            target_sub_classes = torch.full(sub_logits.shape[:2], self.num_classes, dtype=torch.int64, device=sub_logits.device)
+            target_obj_classes = torch.full(obj_logits.shape[:2], self.num_classes, dtype=torch.int64, device=obj_logits.device)
+            target_sub_classes[rel_idx] = target_rels_classes_o
+            target_obj_classes[rel_idx] = target_relo_classes_o
+
+            # Concatenate all targets and logits
+            target_classes = torch.cat((target_classes, target_sub_classes, target_obj_classes), dim=1)  # [bs, 1500]
+            src_logits = torch.cat((pred_logits, sub_logits, obj_logits), dim=1)  # [bs, 1500, 151]
+
+            # One-hot encode targets for focal loss
+            target_classes_onehot = torch.zeros([src_logits.shape[0], src_logits.shape[1], src_logits.shape[2]+1],
+                                            dtype=src_logits.dtype, layout=src_logits.layout, device=src_logits.device)
+            target_classes_onehot.scatter_(2, target_classes.unsqueeze(-1), 1)
+            target_classes_onehot = target_classes_onehot[:, :, :-1]  # Remove the 'no object' class
+
+            # Compute the focal loss
+            loss_ce = sigmoid_focal_loss(src_logits, target_classes_onehot, num_boxes, alpha=self.focal_alpha, gamma=2) * src_logits.shape[1]
+
+            #TODO Weight the loss if necessary
+            #! 先不加原版rel的weight了
+            # Adjust these weights based on your requirements
+            # loss_weight = torch.cat((torch.ones(pred_logits.shape[:2]), indices[2]*0.5, indices[3]*0.5), dim=-1).to(pred_logits.device)
+            # losses = {'loss_ce': (loss_ce * loss_weight).sum() / num_boxes}
+
+            losses = {'loss_ce': loss_ce}
+            # Calculate classification errors (optional)
+            if log:
+                losses['class_error'] = 100 - accuracy(pred_logits[idx], target_classes_o)[0]
+                losses['sub_error'] = 100 - accuracy(sub_logits[rel_idx], target_rels_classes_o)[0]
+                losses['obj_error'] = 100 - accuracy(obj_logits[rel_idx], target_relo_classes_o)[0]
+
+            return losses
+    # def loss_labels(self, outputs, targets, indices, num_boxes, log=True):
+    #     assert 'pred_logits' in outputs
+
+    #     #* Part1 entity loss
+    #     pred_logits = outputs['pred_logits'] #torch.Size([bs, 300, 151])
+    #     idx = self._get_src_permutation_idx(indices[0]) 
+    #     target_classes_o = torch.cat([t["labels"][J] for t, (_, J) in zip(targets, indices[0])])
+    #     target_classes = torch.full(pred_logits.shape[:2], self.num_classes, dtype=torch.int64, device=pred_logits.device)
+    #     target_classes[idx] = target_classes_o
+
+    #     target_classes_onehot = torch.zeros([pred_logits.shape[0], pred_logits.shape[1], pred_logits.shape[2]+1],
+    #                                         dtype=pred_logits.dtype, layout=pred_logits.layout, device=pred_logits.device)
+    #     target_classes_onehot.scatter_(2, target_classes.unsqueeze(-1), 1) # torch.Size([bs, 300, 152])
+    #     #target_classes_onehot = target_classes_onehot[:,:,:-1] # 切掉最后一个1，这样就变成了全0向量代表no obj
+
+    #    #* Part2 sub and obj loss
+    #     sub_logits = outputs['sub_logits'] #torch.Size([bs, 600, 151])
+    #     obj_logits = outputs['obj_logits'] #torch.Size([bs, 600, 151])
+
+    #     rel_idx = self._get_src_permutation_idx(indices[1])
+    #     target_rel_sub_classes_o = torch.cat([t["labels"][t["rel_annotations"][J, 0]] for t, (_, J) in zip(targets, indices[1])])
+    #     target_rel_obj_classes_o = torch.cat([t["labels"][t["rel_annotations"][J, 1]] for t, (_, J) in zip(targets, indices[1])])
+    #     target_sub_classes = torch.full(sub_logits.shape[:2], self.num_classes, dtype=torch.int64, device=sub_logits.device)
+    #     target_obj_classes = torch.full(obj_logits.shape[:2], self.num_classes, dtype=torch.int64, device=obj_logits.device)
+    #     target_sub_classes[rel_idx] = target_rel_sub_classes_o
+    #     target_obj_classes[rel_idx] = target_rel_obj_classes_o
+
+    #     target_sub_classes_onehot = torch.zeros([sub_logits.shape[0], sub_logits.shape[1], sub_logits.shape[2]+1],
+    #                                              dtype=sub_logits.dtype, layout=sub_logits.layout, device=sub_logits.device)
+    #     target_obj_classes_onehot = torch.zeros([obj_logits.shape[0], obj_logits.shape[1], obj_logits.shape[2]+1],
+    #                                              dtype=obj_logits.dtype, layout=obj_logits.layout, device=obj_logits.device)
+        
+    #     target_sub_classes_onehot.scatter_(2, target_sub_classes.unsqueeze(-1), 1)
+    #     target_obj_classes_onehot.scatter_(2, target_obj_classes.unsqueeze(-1), 1)
+
+
+    #     target_classes_onehot1 = torch.cat((target_classes_onehot, target_sub_classes_onehot, target_obj_classes_onehot), dim=1)
+    #     target_classes_onehot1 = target_classes_onehot1[:, :, :-1]
+
+    #     target_classes_all = torch.cat((target_classes, target_sub_classes, target_obj_classes), dim=1)  # [bs, 500]
+    #     src_logits_all = torch.cat((pred_logits, sub_logits, obj_logits), dim=1)  # [bs, 500, 152]
+
+
+    #     target_classes_onehot = torch.zeros_like(src_logits_all).scatter_(2, target_classes_all.unsqueeze(-1), 1)
+    #     target_classes_onehot = target_classes_onehot[:, :, :-1] 
+
+    #     flag =  target_classes_onehot1.equal(target_classes_onehot)
+
+    #     loss_ce = sigmoid_focal_loss(src_logits_all, target_classes_onehot, num_boxes, alpha=self.focal_alpha, gamma=2) * src_logits_all.shape[1]
+
+    #     # TODO Rel这里有个weight  这个weight是从matcher里面产生的，
+    #     #loss_weight = torch.cat((torch.ones(pred_logits.shape[:2]).to(pred_logits.device), indices[2]*0.5, indices[3]*0.5), dim=-1)
+    #     #losses = {'loss_ce': (loss_ce * loss_weight).sum()/self.empty_weight[target_classes].sum()}
+
+    #     losses = {'loss_ce': loss_ce}
+
+    #     if log:
+    #         losses['class_error'] = 100 - accuracy(pred_logits[idx], target_classes_o)[0]
+    #         losses['sub_error'] = 100 - accuracy(sub_logits[rel_idx], target_rel_sub_classes_o)[0]
+    #         losses['obj_error'] = 100 - accuracy(obj_logits[rel_idx], target_rel_obj_classes_o)[0]
+    #     return losses
+
+
+
+    def loss_relations(self, outputs, targets, indices, num_boxes, log=True):
+        """Compute the predicate classification loss
+        """
+        assert 'rel_logits' in outputs
+
+        src_logits = outputs['rel_logits']  #[bs,600,51]
+        idx = self._get_src_permutation_idx(indices[1])
+        target_classes_o = torch.cat([t["rel_annotations"][J,2] for t, (_, J) in zip(targets, indices[1])])
+        target_classes = torch.full(src_logits.shape[:2], self.num_rel_classes, dtype=torch.int64, device=src_logits.device)
+        target_classes[idx] = target_classes_o
+
+        target_classes_onehot = torch.zeros([src_logits.shape[0], src_logits.shape[1], src_logits.shape[2]+1],
+                                             dtype=src_logits.dtype, layout=src_logits.layout, device=src_logits.device)
+        target_classes_onehot.scatter_(2, target_classes.unsqueeze(-1), 1)
+        target_classes_onehot = target_classes_onehot[:, :, :-1] 
+        loss_ce = sigmoid_focal_loss(src_logits, target_classes_onehot, num_boxes, alpha=self.focal_alpha, gamma=2) * src_logits.shape[1]
+
+        #loss_ce = F.cross_entropy(src_logits.transpose(1, 2), target_classes, self.empty_weight_rel)
+
+        losses = {'loss_rel': loss_ce}
+        if log:
+            losses['rel_error'] = 100 - accuracy(src_logits[idx], target_classes_o)[0]
+        return losses
+
+
+
+
+
+    @torch.no_grad()
+    def loss_cardinality(self, outputs, targets, indices, num_boxes):
+        """ Compute the cardinality error, ie the absolute error in the number of predicted non-empty boxes
+        This is not really a loss, it is intended for logging purposes only. It doesn't propagate gradients
+        """
+        pred_logits = outputs['rel_logits']
+        device = pred_logits.device
+        tgt_lengths = torch.as_tensor([len(v["rel_annotations"]) for v in targets], device=device)
+        # Count the number of predictions that are NOT "no-object" (which is the last class)
+        card_pred = (pred_logits.argmax(-1) != pred_logits.shape[-1] - 1).sum(1)
+        card_err = F.l1_loss(card_pred.float(), tgt_lengths.float())
+        losses = {'cardinality_error': card_err}
+        return losses
+    
+
+
+    def loss_boxes(self, outputs, targets, indices, num_boxes):
+        """Compute the losses related to the entity/subject/object bounding boxes, the L1 regression loss and the GIoU loss
+           targets dicts must contain the key "boxes" containing a tensor of dim [nb_target_boxes, 4]
+           The target boxes are expected in format (center_x, center_y, w, h), normalized by the image size.
+        """
+        assert 'pred_boxes' in outputs
+        idx = self._get_src_permutation_idx(indices[0])
+        pred_boxes = outputs['pred_boxes'][idx]
+        target_entry_boxes = torch.cat([t['boxes'][i] for t, (_, i) in zip(targets, indices[0])], dim=0)
+
+        rel_idx = self._get_src_permutation_idx(indices[1])
+        target_rels_boxes = torch.cat([t['boxes'][t["rel_annotations"][i, 0]] for t, (_, i) in zip(targets, indices[1])], dim=0)
+        target_relo_boxes = torch.cat([t['boxes'][t["rel_annotations"][i, 1]] for t, (_, i) in zip(targets, indices[1])], dim=0)
+        rels_boxes = outputs['sub_boxes'][rel_idx]
+        relo_boxes = outputs['obj_boxes'][rel_idx]
+
+        src_boxes = torch.cat((pred_boxes, rels_boxes, relo_boxes), dim=0)
+        target_boxes = torch.cat((target_entry_boxes, target_rels_boxes, target_relo_boxes), dim=0)
+        loss_bbox = F.l1_loss(src_boxes, target_boxes, reduction='none')
+
+        losses = {}
+        losses['loss_bbox'] = loss_bbox.sum() / num_boxes
+
+        loss_giou = 1 - torch.diag(box_ops.generalized_box_iou(
+            box_ops.box_cxcywh_to_xyxy(src_boxes),
+            box_ops.box_cxcywh_to_xyxy(target_boxes)))
+        losses['loss_giou'] = loss_giou.sum() / num_boxes
+        return losses
+    
+    def _get_src_permutation_idx(self, indices):
+        batch_idx = torch.cat([torch.full_like(src, i) for i, (src, _) in enumerate(indices)])
+        src_idx = torch.cat([src for (src, _) in indices])
+        return batch_idx, src_idx
+    
+
+    def _get_tgt_permutation_idx(self, indices):
+        # permute targets following indices
+        batch_idx = torch.cat([torch.full_like(tgt, i) for i, (_, tgt) in enumerate(indices)])
+        tgt_idx = torch.cat([tgt for (_, tgt) in indices])
+        return batch_idx, tgt_idx
+    
+    def get_loss(self, loss, outputs, targets, indices, num_boxes, **kwargs):
+        loss_map = {
+            'labels': self.loss_labels,
+            'cardinality': self.loss_cardinality,
+            'boxes': self.loss_boxes,
+            'relations': self.loss_relations
+        }
+        assert loss in loss_map, f'do you really want to compute {loss} loss?'
+        return loss_map[loss](outputs, targets, indices, num_boxes, **kwargs)
+
+
+
+    def forward(self, outputs, targets):
+        outputs_without_aux = {k: v for k, v in outputs.items() if k != 'aux_outputs'}
+        indices = self.matcher(outputs_without_aux, targets)
+        self.indices = indices
+        num_boxes = sum(len(t["labels"])+len(t["rel_annotations"]) for t in targets) #78=47+31
+        num_boxes = torch.as_tensor([num_boxes], dtype=torch.float, device=next(iter(outputs.values())).device)
+        if is_dist_avail_and_initialized():
+            torch.distributed.all_reduce(num_boxes)
+        num_boxes = torch.clamp(num_boxes / get_world_size(), min=1).item()
+
+        losses = {}
+        for loss in self.losses:
+            losses.update(self.get_loss(loss, outputs, targets, indices, num_boxes))
+
+        
+        if 'aux_outputs' in outputs:
+            for i, aux_outputs in enumerate(outputs['aux_outputs']):
+                indices = self.matcher(aux_outputs, targets)
+                for loss in self.losses:
+                    kwargs = {}
+                    if loss == 'labels' or loss == 'relations':
+                        # Logging is enabled only for the last layer
+                        kwargs = {'log': False}
+                    l_dict = self.get_loss(loss, aux_outputs, targets, indices, num_boxes, **kwargs)
+                    l_dict = {k + f'_{i}': v for k, v in l_dict.items()}
+                    losses.update(l_dict)
+
+        return losses
+
+
+
+class PostProcess(nn.Module):
+    def __init__(self, num_select=100):
+        super().__init__()
+        self.num_select = num_select
+
+    @torch.no_grad()
+    def forward(self, outputs, target_sizes):
+        num_select = self.num_select
+        out_logits, out_bbox = outputs['pred_logits'], outputs['pred_boxes']
+        assert len(out_logits) == len(target_sizes)
+        assert target_sizes.shape[1] == 2
+
+        prob = out_logits.sigmoid()           #rel prob = F.softmax(out_logits, -1)
+        topk_values, topk_indexes = torch.topk(prob.view(out_logits.shape[0], -1), num_select, dim=1)
+
+
+
+
+
+
+
 
 
 
@@ -194,77 +634,25 @@ def build_DABRelTR(args):
     backbone = build_backbone(args)
 
     transformer = build_transformer(args)
-    matcher = None #build_matcher(args)
+    matcher = build_matcher(args)
     model = DABRelTR(
         backbone,
         transformer,
         num_classes=num_classes,
         num_rel_classes = num_rel_classes,
-        num_entities=args.num_entities,
+        num_queries=args.num_entities,
         num_triplets=args.num_triplets,
+        num_dec_layers=args.dec_layers,
+        iter_update=True,
+        query_dim=4,
         aux_loss=args.aux_loss,
-        matcher=matcher)
+        random_refpoints_xy=args.random_refpoints_xy)
 
-    weight_dict = {'loss_ce': 1, 'loss_bbox': args.bbox_loss_coef}
+    weight_dict = {'loss_ce': args.cls_loss_coef, 'loss_bbox': args.bbox_loss_coef}
     weight_dict['loss_giou'] = args.giou_loss_coef
     weight_dict['loss_rel'] = args.rel_loss_coef
 
-    # # TODO this is a hack
-    # if args.aux_loss:
-    #     aux_weight_dict = {}
-    #     for i in range(args.dec_layers - 1):
-    #         aux_weight_dict.update({k + f'_{i}': v for k, v in weight_dict.items()})
-    #     weight_dict.update(aux_weight_dict)
 
-    # losses = ['labels', 'boxes', 'cardinality', "relations"]
-
-    # criterion = SetCriterion(num_classes, num_rel_classes, matcher=matcher, weight_dict=weight_dict,
-    #                          eos_coef=args.eos_coef, losses=losses)
-    # criterion.to(device)
-    # postprocessors = {'bbox': PostProcess()}
-
-    #return model, criterion, postprocessors
-    return model
-
-def build_DABDETR(args):
-    # the `num_classes` naming here is somewhat misleading.
-    # it indeed corresponds to `max_obj_id + 1`, where max_obj_id
-    # is the maximum id for a class in your dataset. For example,
-    # COCO has a max_obj_id of 90, so we pass `num_classes` to be 91.
-    # As another example, for a dataset that has a single class with id 1,
-    # you should pass `num_classes` to be 2 (max_obj_id + 1).
-    # For more details on this, check the following discussion
-    # https://github.com/facebookresearch/detr/issues/108#issuecomment-650269223
-    num_classes = 20 if args.dataset_file != 'coco' else 91
-    if args.dataset_file == "coco_panoptic":
-        # for panoptic, we just add a num_classes that is large enough to hold
-        # max_obj_id + 1, but the exact value doesn't really matter
-        num_classes = 250
-    device = torch.device(args.device)
-
-    backbone = build_backbone(args)
-
-    transformer = build_transformer(args)
-
-    model = DABDETR(
-        backbone,
-        transformer,
-        num_classes=num_classes,
-        num_queries=args.num_queries,
-        num_dec_layers=args.dec_layers,
-        aux_loss=args.aux_loss,
-        iter_update=True,
-        query_dim=4,
-        random_refpoints_xy=args.random_refpoints_xy,
-    )
-    if args.masks:
-        model = DETRsegm(model, freeze_detr=(args.frozen_weights is not None))
-    matcher = build_matcher(args)
-    weight_dict = {'loss_ce': args.cls_loss_coef, 'loss_bbox': args.bbox_loss_coef}
-    weight_dict['loss_giou'] = args.giou_loss_coef
-    if args.masks:
-        weight_dict["loss_mask"] = args.mask_loss_coef
-        weight_dict["loss_dice"] = args.dice_loss_coef
     # TODO this is a hack
     if args.aux_loss:
         aux_weight_dict = {}
@@ -272,17 +660,80 @@ def build_DABDETR(args):
             aux_weight_dict.update({k + f'_{i}': v for k, v in weight_dict.items()})
         weight_dict.update(aux_weight_dict)
 
-    losses = ['labels', 'boxes', 'cardinality']
-    if args.masks:
-        losses += ["masks"]
-    criterion = SetCriterion(num_classes, matcher=matcher, weight_dict=weight_dict,
-                             focal_alpha=args.focal_alpha, losses=losses)
-    criterion.to(device)
-    postprocessors = {'bbox': PostProcess(num_select=args.num_select)}
-    if args.masks:
-        postprocessors['segm'] = PostProcessSegm()
-        if args.dataset_file == "coco_panoptic":
-            is_thing_map = {i: i <= 90 for i in range(201)}
-            postprocessors["panoptic"] = PostProcessPanoptic(is_thing_map, threshold=0.85)
 
-    return model, criterion, postprocessors
+    losses = ['labels', 'boxes', 'cardinality', "relations"]
+
+    criterion = SetCriterion(num_classes, 
+                             num_rel_classes, 
+                             matcher=matcher, 
+                             weight_dict=weight_dict,
+                             eos_coef=args.eos_coef,
+                             focal_alpha=args.focal_alpha, 
+                             losses=losses)
+    
+    criterion.to(device)
+    # postprocessors = {'bbox': PostProcess()}
+
+    #return model, criterion, postprocessors
+    return model, criterion, None
+
+# def build_DABDETR(args):
+#     # the `num_classes` naming here is somewhat misleading.
+#     # it indeed corresponds to `max_obj_id + 1`, where max_obj_id
+#     # is the maximum id for a class in your dataset. For example,
+#     # COCO has a max_obj_id of 90, so we pass `num_classes` to be 91.
+#     # As another example, for a dataset that has a single class with id 1,
+#     # you should pass `num_classes` to be 2 (max_obj_id + 1).
+#     # For more details on this, check the following discussion
+#     # https://github.com/facebookresearch/detr/issues/108#issuecomment-650269223
+#     num_classes = 20 if args.dataset_file != 'coco' else 91
+#     if args.dataset_file == "coco_panoptic":
+#         # for panoptic, we just add a num_classes that is large enough to hold
+#         # max_obj_id + 1, but the exact value doesn't really matter
+#         num_classes = 250
+#     device = torch.device(args.device)
+
+#     backbone = build_backbone(args)
+
+#     transformer = build_transformer(args)
+
+#     model = DABDETR(
+#         backbone,
+#         transformer,
+#         num_classes=num_classes,
+#         num_queries=args.num_queries,
+#         num_dec_layers=args.dec_layers,
+#         aux_loss=args.aux_loss,
+#         iter_update=True,
+#         query_dim=4,
+#         random_refpoints_xy=args.random_refpoints_xy,
+#     )
+#     # if args.masks:
+#     #     model = DETRsegm(model, freeze_detr=(args.frozen_weights is not None))
+#     matcher = build_matcher(args)
+#     weight_dict = {'loss_ce': args.cls_loss_coef, 'loss_bbox': args.bbox_loss_coef}
+#     weight_dict['loss_giou'] = args.giou_loss_coef
+#     if args.masks:
+#         weight_dict["loss_mask"] = args.mask_loss_coef
+#         weight_dict["loss_dice"] = args.dice_loss_coef
+#     # TODO this is a hack
+#     if args.aux_loss:
+#         aux_weight_dict = {}
+#         for i in range(args.dec_layers - 1):
+#             aux_weight_dict.update({k + f'_{i}': v for k, v in weight_dict.items()})
+#         weight_dict.update(aux_weight_dict)
+
+#     losses = ['labels', 'boxes', 'cardinality']
+#     if args.masks:
+#         losses += ["masks"]
+#     criterion = SetCriterion(num_classes, matcher=matcher, weight_dict=weight_dict,
+#                              focal_alpha=args.focal_alpha, losses=losses)
+#     criterion.to(device)
+#     postprocessors = {'bbox': PostProcess(num_select=args.num_select)}
+#     if args.masks:
+#         postprocessors['segm'] = PostProcessSegm()
+#         if args.dataset_file == "coco_panoptic":
+#             is_thing_map = {i: i <= 90 for i in range(201)}
+#             postprocessors["panoptic"] = PostProcessPanoptic(is_thing_map, threshold=0.85)
+
+#     return model, criterion, postprocessors

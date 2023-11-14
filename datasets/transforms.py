@@ -274,3 +274,12 @@ class Compose(object):
             format_string += "    {0}".format(t)
         format_string += "\n)"
         return format_string
+
+
+
+class ResizeDebug(object):
+    def __init__(self, size):
+        self.size = size
+
+    def __call__(self, img, target):
+        return resize(img, target, self.size)

@@ -25,8 +25,8 @@ from typing import Dict, List
 
 from util.misc import NestedTensor, is_main_process
 
-from position_encoding import build_position_encoding
-from swin_transformer import build_swin_transformer
+from .position_encoding import build_position_encoding
+from .swin_transformer import build_swin_transformer
 
 
 class FrozenBatchNorm2d(torch.nn.Module):

@@ -11,8 +11,10 @@ import os, sys
 from typing import Optional
 import datasets
 from models.DABRelTR.util import misc as utils  #import DABRelTR.util.misc 
-from .datasets import build_dataset, get_coco_api_from_dataset
-
+from datasets import build_dataset, get_coco_api_from_dataset
+# from models import build_model
+from models.DABRelTR.DABRelTR import build_DABRelTR
+from cmh_dab_rel_engine import train_one_epoch
 
 def get_args_parser():
     parser = argparse.ArgumentParser('DAB-RelTR', add_help=False)
@@ -32,8 +34,6 @@ def get_args_parser():
     # * Backbone
     #=======================DAB========================================================
     parser.add_argument('--modelname', type=str, required=True, choices=['dab_detr', 'dab_deformable_detr'])
-    parser.add_argument('--frozen_weights', type=str, default=None,
-                        help="Path to the pretrained model. If set, only the mask head will be trained")
     #=======================DAB========================================================
 
     parser.add_argument('--backbone', default='resnet50', type=str,
@@ -111,8 +111,7 @@ def get_args_parser():
     parser.add_argument('--giou_loss_coef', default=2, type=float, 
                         help="loss coefficient for bbox GIOU loss")
 
-    parser.add_argument('--eos_coef', default=0.1, type=float,
-                        help="Relative classification weight of the no-object class")
+
     parser.add_argument('--rel_loss_coef', default=1, type=float)  # RelTR
     #=======================DAB========================================================
     parser.add_argument('--eos_coef', default=0.1, type=float, help="Relative classification weight of the no-object class")  # Default values are same
@@ -146,6 +145,9 @@ def get_args_parser():
                         help="Return the fpn if there is the tag")
     parser.add_argument('--find_unused_params', action='store_true')
 
+    parser.add_argument('--masks', action='store_true',
+                        help="Train segmentation head if the flag is provided")
+
 
     return parser
 
@@ -155,7 +157,7 @@ def build_model_main(args):
         model, criterion, postprocessors = build_DABRelTR(args)
     # elif args.modelname.lower() == 'dab_deformable_detr':
     #     model, criterion, postprocessors = build_dab_deformable_detr(args)
-    # else:
+    else:
         raise NotImplementedError
 
     return model, criterion, postprocessors
@@ -179,11 +181,13 @@ def main(args):
 
 
     model, criterion, postprocessors = build_model_main(args)
+    #model, criterion, postprocessors = build_model(args)
+    print(model)
     model.to(device)
 
     model_without_ddp = model
     if args.distributed:
-        model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
+        model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu], find_unused_parameters=False)
         model_without_ddp = model.module
     n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print('number of params:', n_parameters)
@@ -202,6 +206,12 @@ def main(args):
     dataset_train = build_dataset(image_set='train', args=args)
     dataset_val = build_dataset(image_set='val', args=args)
 
+    # dataset_size = len(dataset_train)
+    # train_size = int(0.3 * dataset_size)
+
+    # # 使用切片操作来分割数据集
+    # dataset_train = torch.utils.data.Subset(dataset_train, indices=range(train_size))
+
     if args.distributed:
         sampler_train = DistributedSampler(dataset_train)
         sampler_val = DistributedSampler(dataset_val, shuffle=False)
@@ -216,6 +226,9 @@ def main(args):
                                    collate_fn=utils.collate_fn, num_workers=args.num_workers)
     data_loader_val = DataLoader(dataset_val, args.batch_size, sampler=sampler_val,
                                  drop_last=False, collate_fn=utils.collate_fn, num_workers=args.num_workers)
+    
+    # data_loader_train = DataLoader(dataset_train, batch_size=args.batch_size, shuffle=False, collate_fn=utils.collate_fn, num_workers=args.num_workers)
+    # data_loader_val = DataLoader(dataset_val, args.batch_size, shuffle=False, drop_last=False, collate_fn=utils.collate_fn, num_workers=args.num_workers)
 
     base_ds = get_coco_api_from_dataset(dataset_val)
 
@@ -261,27 +274,27 @@ def main(args):
                     'args': args,
                 }, checkpoint_path)
 
-        test_stats, coco_evaluator = evaluate(model, criterion, postprocessors, data_loader_val, base_ds, device, args)
+        # test_stats, coco_evaluator = evaluate(model, criterion, postprocessors, data_loader_val, base_ds, device, args)
 
-        log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
-                     **{f'test_{k}': v for k, v in test_stats.items()},
-                     'epoch': epoch,
-                     'n_parameters': n_parameters}
+        # log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
+        #              **{f'test_{k}': v for k, v in test_stats.items()},
+        #              'epoch': epoch,
+        #              'n_parameters': n_parameters}
 
-        if args.output_dir and utils.is_main_process():
-            with (output_dir / "log.txt").open("a") as f:
-                f.write(json.dumps(log_stats) + "\n")
+        # if args.output_dir and utils.is_main_process():
+        #     with (output_dir / "log.txt").open("a") as f:
+        #         f.write(json.dumps(log_stats) + "\n")
 
-            # for evaluation logs
-            if coco_evaluator is not None:
-                (output_dir / 'eval').mkdir(exist_ok=True)
-                if "bbox" in coco_evaluator.coco_eval:
-                    filenames = ['latest.pth']
-                    if epoch % 50 == 0:
-                        filenames.append(f'{epoch:03}.pth')
-                    for name in filenames:
-                        torch.save(coco_evaluator.coco_eval["bbox"].eval,
-                                   output_dir / "eval" / name)
+        #     # for evaluation logs
+        #     if coco_evaluator is not None:
+        #         (output_dir / 'eval').mkdir(exist_ok=True)
+        #         if "bbox" in coco_evaluator.coco_eval:
+        #             filenames = ['latest.pth']
+        #             if epoch % 50 == 0:
+        #                 filenames.append(f'{epoch:03}.pth')
+        #             for name in filenames:
+        #                 torch.save(coco_evaluator.coco_eval["bbox"].eval,
+        #                            output_dir / "eval" / name)
 
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))

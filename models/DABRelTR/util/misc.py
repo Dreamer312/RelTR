@@ -488,7 +488,8 @@ def init_distributed_mode(args):
         local_world_size = int(os.environ['WORLD_SIZE'])
         args.world_size = args.world_size * local_world_size
         args.gpu = args.local_rank = int(os.environ['LOCAL_RANK'])
-        args.rank = args.rank * local_world_size + args.local_rank
+        #args.rank = args.rank * local_world_size + args.local_rank
+        args.rank = int(os.environ["RANK"])
         print('world size: {}, rank: {}, local rank: {}'.format(args.world_size, args.rank, args.local_rank))
         print(json.dumps(dict(os.environ), indent=2))
     elif 'SLURM_PROCID' in os.environ:

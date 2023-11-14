@@ -164,6 +164,16 @@ def make_coco_transforms(image_set):
     raise ValueError(f'unknown {image_set}')
 
 
+def make_coco_transforms_debug(image_set):
+    normalize = T.Compose([
+        T.ToTensor(),
+        T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+    ])
+    return T.Compose([
+                T.ResizeDebug((1280, 800)),
+                normalize,
+            ])  
+
 def build(image_set, args):
 
     ann_path = args.ann_path
@@ -177,5 +187,5 @@ def build(image_set, args):
         else:
             ann_file = ann_path + 'val.json'
 
-    dataset = CocoDetection(img_folder, ann_file, transforms=make_coco_transforms(image_set), return_masks=False)
+    dataset = CocoDetection(img_folder, ann_file, transforms=make_coco_transforms_debug(image_set), return_masks=False)
     return dataset

@@ -93,12 +93,14 @@ class RelTR(nn.Module):
             samples = nested_tensor_from_tensor_list(samples)
         features, pos = self.backbone(samples)
 
-        src, mask = features[-1].decompose()  # torch.Size([bs, 2048, 28, 34])
+        src, mask = features[-1].decompose()  # torch.Size([bs, 2048, 25, 40])
         assert mask is not None
         hs, hs_t, so_masks, _ = self.transformer(self.input_proj(src), mask, self.entity_embed.weight,
                                                  self.triplet_embed.weight, pos[-1], self.so_embed.weight)
         so_masks = so_masks.detach() #torch.Size([6, bs, 200, 2, 28, 34])
-        so_masks = self.so_mask_conv(so_masks.view(-1, 2, src.shape[-2],src.shape[-1])).view(hs_t.shape[0], hs_t.shape[1], hs_t.shape[2],-1) #torch.Size([6, bs, 200, 2048])
+        so_masks = so_masks.view(-1, 2, src.shape[-2],src.shape[-1])
+        so_masks = self.so_mask_conv(so_masks) 
+        so_masks = so_masks.view(hs_t.shape[0], hs_t.shape[1], hs_t.shape[2],-1) #torch.Size([6, bs, 200, 2048])
         so_masks = self.so_mask_fc(so_masks) # torch.Size([6, bs, 200, 128])
 
         hs_sub, hs_obj = torch.split(hs_t, self.hidden_dim, dim=-1) # torch.Size([6, bs, 200, 256]) torch.Size([6, bs, 200, 256])
@@ -240,10 +242,10 @@ class SetCriterion(nn.Module):
         target_sub_classes[rel_idx] = target_rels_classes_o
         target_obj_classes[rel_idx] = target_relo_classes_o
 
-        target_classes = torch.cat((target_classes, target_sub_classes, target_obj_classes), dim=1)
-        src_logits = torch.cat((pred_logits, sub_logits, obj_logits), dim=1)
+        target_classes = torch.cat((target_classes, target_sub_classes, target_obj_classes), dim=1) #[bs, 500]
+        src_logits = torch.cat((pred_logits, sub_logits, obj_logits), dim=1) #[bs, 500, 152]
 
-        loss_ce = F.cross_entropy(src_logits.transpose(1, 2), target_classes, self.empty_weight, reduction='none')
+        loss_ce = F.cross_entropy(src_logits.transpose(1, 2), target_classes, self.empty_weight, reduction='none') #[bs, 500]
 
         loss_weight = torch.cat((torch.ones(pred_logits.shape[:2]).to(pred_logits.device), indices[2]*0.5, indices[3]*0.5), dim=-1)
         losses = {'loss_ce': (loss_ce * loss_weight).sum()/self.empty_weight[target_classes].sum()}
@@ -297,13 +299,35 @@ class SetCriterion(nn.Module):
             box_ops.box_cxcywh_to_xyxy(target_boxes)))
         losses['loss_giou'] = loss_giou.sum() / num_boxes
         return losses
+    
+    # 原版detr
+    # def loss_labels(self, outputs, targets, indices, num_boxes, log=True):
+    #     """Classification loss (NLL)
+    #     targets dicts must contain the key "labels" containing a tensor of dim [nb_target_boxes]
+    #     """
+    #     assert 'pred_logits' in outputs
+    #     src_logits = outputs['pred_logits']
 
+    #     idx = self._get_src_permutation_idx(indices)
+    #     target_classes_o = torch.cat([t["labels"][J] for t, (_, J) in zip(targets, indices)])
+    #     target_classes = torch.full(src_logits.shape[:2], self.num_classes,
+    #                                 dtype=torch.int64, device=src_logits.device)
+    #     target_classes[idx] = target_classes_o
+
+    #     loss_ce = F.cross_entropy(src_logits.transpose(1, 2), target_classes, self.empty_weight)
+    #     losses = {'loss_ce': loss_ce}
+
+    #     if log:
+    #         # TODO this should probably be a separate loss, not hacked in this one here
+    #         losses['class_error'] = 100 - accuracy(src_logits[idx], target_classes_o)[0]
+    #     return losses
+    
     def loss_relations(self, outputs, targets, indices, num_boxes, log=True):
         """Compute the predicate classification loss
         """
         assert 'rel_logits' in outputs
 
-        src_logits = outputs['rel_logits']
+        src_logits = outputs['rel_logits']  #[bs,200,52]
         idx = self._get_src_permutation_idx(indices[1])
         target_classes_o = torch.cat([t["rel_annotations"][J,2] for t, (_, J) in zip(targets, indices[1])])
         target_classes = torch.full(src_logits.shape[:2], self.num_rel_classes, dtype=torch.int64, device=src_logits.device)
@@ -417,6 +441,7 @@ class PostProcess(nn.Module):
         out_logits, out_bbox = outputs['pred_logits'], outputs['pred_boxes']
 
         assert len(out_logits) == len(target_sizes)
+        
         assert target_sizes.shape[1] == 2
 
         prob = F.softmax(out_logits, -1)
