@@ -54,23 +54,26 @@ def evaluate_from_dict(gt_entry, pred_entry, mode, result_dict, multiple_preds=F
     :param kwargs: 
     :return: 
     """
-    gt_rels = gt_entry['gt_relations']
+    gt_rels = gt_entry['gt_relations']  #[x1,3]   x1是一张图片里面的rel数量
 
 
-    gt_boxes = gt_entry['gt_boxes'].astype(float)
-    gt_classes = gt_entry['gt_classes']
+    gt_boxes = gt_entry['gt_boxes'].astype(float) #[x2,4]  x2是一张图片里面的box数量 与上面的x1不同
+    gt_classes = gt_entry['gt_classes'] ##[x2]
 
-    rel_scores = pred_entry['rel_scores']
+    rel_scores = pred_entry['rel_scores'] #[200, 50]
 
-    pred_rels = 1+rel_scores.argmax(1)
-    predicate_scores = rel_scores.max(1)
+    #类别索引从0开始计数，而实际的类别标签通常从1开始计数（0通常保留给背景类或无类别）。
+    # 所以这里通过加1将索引转换为实际的类别标签。举个例子，如果argmax返回的索引为0（表示第一个类别），
+    # 通过加1后，它表示的是第1类。
+    pred_rels = 1+rel_scores.argmax(1)   #np[200]
+    predicate_scores = rel_scores.max(1) #np[200]
 
-    sub_boxes = pred_entry['sub_boxes']
-    obj_boxes = pred_entry['obj_boxes']
-    sub_score = pred_entry['sub_scores']
-    obj_score = pred_entry['obj_scores']
-    sub_class = pred_entry['sub_classes']
-    obj_class = pred_entry['obj_classes']
+    sub_boxes = pred_entry['sub_boxes'] #np[200,4]
+    obj_boxes = pred_entry['obj_boxes'] #np[200,4]
+    sub_score = pred_entry['sub_scores'] #np[200]
+    obj_score = pred_entry['obj_scores'] #np[200]
+    sub_class = pred_entry['sub_classes'] #np[200]
+    obj_class = pred_entry['obj_classes'] #np[200]
 
     pred_to_gt, _, rel_scores = evaluate_recall(
                 gt_rels, gt_boxes, gt_classes,

@@ -301,15 +301,18 @@ def evaluate_rel_batch(outputs, targets, evaluator, evaluator_list):
 
     #TODO
     for batch, target in enumerate(targets):
-        target_bboxes_scaled = rescale_bboxes(target['boxes'].cpu(), torch.flip(target['orig_size'],dims=[0]).cpu()).clone().numpy() # recovered boxes with original size
+        # recovered boxes with original size
+        target_bboxes_scaled = rescale_bboxes(target['boxes'].cpu(), torch.flip(target['orig_size'],dims=[0]).cpu()).clone().numpy() 
 
         gt_entry = {'gt_classes': target['labels'].cpu().clone().numpy(),
                     'gt_relations': target['rel_annotations'].cpu().clone().numpy(),
                     'gt_boxes': target_bboxes_scaled}
 
+        #sub_bboxes_scaled   obj_bboxes_scaled 都是[200,4]的np array
         sub_bboxes_scaled = rescale_bboxes(outputs['sub_boxes'][batch].cpu(), torch.flip(target['orig_size'],dims=[0]).cpu()).clone().numpy()
         obj_bboxes_scaled = rescale_bboxes(outputs['obj_boxes'][batch].cpu(), torch.flip(target['orig_size'],dims=[0]).cpu()).clone().numpy()
 
+        # pred_sub_scores[200]    pred_sub_classespred_sub_scores[200]
         pred_sub_scores, pred_sub_classes = torch.max(outputs['sub_logits'][batch].softmax(-1)[:, :-1], dim=1)
         pred_obj_scores, pred_obj_classes = torch.max(outputs['obj_logits'][batch].softmax(-1)[:, :-1], dim=1)
 
@@ -318,40 +321,104 @@ def evaluate_rel_batch(outputs, targets, evaluator, evaluator_list):
         #     rel_scores = torch.softmax(outputs['rel_logits'][batch][:, 1:-1]-counterfact_rel_logits, dim=1)
         # else:
         #     rel_scores = outputs['rel_logits'][batch][:, 1:-1].softmax(-1)
+        #  rel_scores [200,50]
         rel_scores = outputs['rel_logits'][batch][:, 1:-1].softmax(-1)
         ###################################################################A-relation-A
-        #mask = torch.logical_and((pred_sub_classes - pred_obj_classes != 0).cpu(), torch.logical_and(pred_obj_scores >= 0.002, pred_sub_scores >= 0.002).cpu())
+        # mask torch.size[200]
+        #创建一个掩码，以排除主体和客体类别相同的预测。这是为了消除不太可能形成实际关系的情况。
         mask = (pred_sub_classes - pred_obj_classes != 0).cpu()
-        if mask.sum() <= 198:
+
+        #如果掩码过滤后的预测数量较少（少于198个），则执行以下操作：
+        if mask.sum() <= 198: 
+            #*================================================================================
+            #sub_bboxes_scaled[mask]、pred_sub_classes[mask] 等操作使用掩码过滤出有效的预测。
             sub_bboxes_scaled = sub_bboxes_scaled[mask]
             pred_sub_classes = pred_sub_classes[mask]
             pred_sub_scores = pred_sub_scores[mask]
+
             obj_bboxes_scaled = obj_bboxes_scaled[mask]
             pred_obj_classes = pred_obj_classes[mask]
             pred_obj_scores = pred_obj_scores[mask]
-            rel_scores = rel_scores[mask]
 
+            rel_scores = rel_scores[mask]
+            #*================================================================================
+
+
+
+            #*================================================================================          
+            # 1. **计算联合得分**：`pred_sub_scores + pred_obj_scores`：
+            #    - 这里，`pred_sub_scores` 和 `pred_obj_scores` 是长度为200的numpy数组，包含了主体和客体预测的概率得分。
+            #    - 将两个得分数组相加，意味着对于每个预测的关系，联合得分是由主体和客体的得分共同决定的。
+
+            # 2. **排序得分**：`.sort(descending=True)[1]`：
+            #    - 将这些联合得分按降序排序。这里使用的是 `torch.sort`，它返回两个数组：排序后的值和相应的索引。
+            #    - `[1]` 取出排序后的索引，这些索引对应于原始得分数组中的位置。
+
+            # 3. **选择补充的索引**：`[: mask.shape[0] - mask.sum()]`：
+            #    - `mask` 数组用于过滤掉那些主体和客体类别相同的预测。
+            #    - `mask.shape[0]` 是掩码的长度（200），而 `mask.sum()` 是掩码中值为True的元素数量，表示被保留的预测数量。
+            #    - `mask.shape[0] - mask.sum()` 计算了被掩码过滤掉的元素数量。
+            #    - 通过选择排名靠前的这些索引，我们补充那些被掩码过滤掉的预测。
+
+            # 4. **结果**：`padded_indices` 是一个索引数组，指示了应该从排序后的预测中选择哪些元素来补充被掩码过滤掉的预测。
+
+            # 总之，这个过程的目的是在保留高得分预测的同时，为那些因掩码过滤而缺失的预测提供替代项。这样做可以确保在进行场景图评估时，
+            # 有足够的预测来考虑，尤其是在排除了某些可能不合逻辑的主体-客体组合后。
             padded_indices = (pred_sub_scores + pred_obj_scores).sort(descending=True)[1][: mask.shape[0] - mask.sum()].cpu()
+
             padded_sub_bboxes = sub_bboxes_scaled[padded_indices]
             padded_sub_class = pred_sub_classes[padded_indices]
             padded_sub_scores = pred_sub_scores[padded_indices]
+
             padded_obj_bboxes = obj_bboxes_scaled[padded_indices]
             padded_obj_class = pred_obj_classes[padded_indices]
             padded_obj_scores = pred_obj_scores[padded_indices]
+
             padded_rel_scores = rel_scores[padded_indices]
-            max_value_indices = torch.max(padded_rel_scores, dim=1)[1]
+            #  padded_rel_scores [40,50]  假如padded 40个
+            #*================================================================================ 
+            # 这段代码的目的是在处理关系得分（`padded_rel_scores`），以增强第二高的得分并消除最高得分。
+            # 这样做可能是为了提高模型预测多样性，减少总是选择最高得分预测的倾向。具体步骤如下：
+
+            # 1. **找到最高得分的索引**：`max_value_indices = torch.max(padded_rel_scores, dim=1)[1]`：
+            # - `torch.max(padded_rel_scores, dim=1)` 对每行（即每个关系预测）的关系得分进行操作，返回每行的最大值及其索引。
+            # - `[1]` 获取这些最大值的索引，即每行得分最高的关系类别的索引。
+
+            # 2. **遍历最高得分的索引**：`for i, idx in enumerate(max_value_indices)`：
+            # - 这个循环遍历每个预测（即每行）的最高得分索引。
+
+            # 3. **找到第二高得分的索引**：`second_max_index = (-padded_rel_scores[i]).sort()[1][1]`：
+            # - 通过取 `padded_rel_scores[i]` 的负值并排序，可以找到第二高的得分。
+            # - `sort()[1]` 返回排序后的索引，`[1]` 获取第二个元素的索引，即第二高得分的索引。
+
+            # 4. **增强第二高得分**：`padded_rel_scores[i, second_max_index] += padded_rel_scores[i, idx]*0.2`：
+            # - 这里将第二高得分增强了最高得分的20%。
+            # - 这可能是为了在预测关系时增加多样性，避免模型总是倾向于选择得分最高的关系类别。
+
+            # 5. **消除最高得分**：`padded_rel_scores[i, idx] = 0`：
+            # - 将最高得分的关系类别得分设置为0，这样在之后的处理中就不会选择这个关系类别。
+
+            # 总结：这段代码通过增强第二高的关系得分并消除最高得分，试图促使模型在预测关系时不仅仅依赖于最高得分，
+            # 而是考虑到得分较高但不是最高的其他关系类别。这可能有助于提高模型预测的多样性和准确性。
+            max_value_indices = torch.max(padded_rel_scores, dim=1)[1]  # torch size[40]
             for i, idx in enumerate(max_value_indices):
                 second_max_index = (-padded_rel_scores[i]).sort()[1][1]
                 padded_rel_scores[i, second_max_index] += padded_rel_scores[i, idx]*0.2
                 padded_rel_scores[i, idx] = 0
+            #*================================================================================ 
 
+
+            
             sub_bboxes_scaled = np.concatenate([sub_bboxes_scaled, padded_sub_bboxes], axis=0)
             pred_sub_classes = torch.cat([pred_sub_classes, padded_sub_class], dim=0)
             pred_sub_scores = torch.cat([pred_sub_scores, padded_sub_scores],dim=0)
+
             obj_bboxes_scaled = np.concatenate([obj_bboxes_scaled, padded_obj_bboxes], axis=0)
             pred_obj_classes = torch.cat([pred_obj_classes, padded_obj_class], dim=0)
             pred_obj_scores = torch.cat([pred_obj_scores, padded_obj_scores],dim=0)
+
             rel_scores = torch.cat([rel_scores, padded_rel_scores],dim=0)
+            #*================================================================================
         ###################################################################A-relation-A
 
         #

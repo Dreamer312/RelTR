@@ -13,7 +13,7 @@ from .dabrel_transformer import build_transformer
 from .matcher import build_matcher
 from .util import box_ops
 
-
+from collections import Counter
 
 def sigmoid_focal_loss(inputs, targets, num_boxes, alpha: float = 0.25, gamma: float = 2):
     """
@@ -229,10 +229,10 @@ class DABRelTR(nn.Module):
         #        so_mask:torch.Size([6, bs, 600, 2, 25, 40])    
         # }
         result = self.transformer(self.input_proj(src), 
-                                         mask, embedweight, 
-                                         self.refpoint_embed_triplets.weight, 
-                                         self.so_embed.weight, 
-                                         pos[-1])
+                                  mask, embedweight, 
+                                  self.refpoint_embed_triplets.weight, 
+                                  self.so_embed.weight, 
+                                  pos[-1])
         # hs torch.Size([6, bs, 300, 256]) 6应该是6层
         # references torch.Size([6, bs, 300, 4])
         
@@ -498,7 +498,7 @@ class SetCriterion(nn.Module):
 
 
 
-
+    #todo 现在是和sofmax版本的，忘了改成sigmoid的了，所以有问题
     @torch.no_grad()
     def loss_cardinality(self, outputs, targets, indices, num_boxes):
         """ Compute the cardinality error, ie the absolute error in the number of predicted non-empty boxes
@@ -600,19 +600,63 @@ class SetCriterion(nn.Module):
 
 
 class PostProcess(nn.Module):
-    def __init__(self, num_select=100):
+    """ This module converts the model's output into the format expected by the coco api"""
+    def __init__(self, num_select=100) -> None:
         super().__init__()
         self.num_select = num_select
 
     @torch.no_grad()
     def forward(self, outputs, target_sizes):
+        """ Perform the computation
+        Parameters:
+            outputs: raw outputs of the model
+            target_sizes: tensor of dimension [batch_size x 2] containing the size of each images of the batch
+                          For evaluation, this must be the original image size (before any data augmentation)
+                          For visualization, this should be the image size after data augment, but before padding
+        """
         num_select = self.num_select
         out_logits, out_bbox = outputs['pred_logits'], outputs['pred_boxes']
+
         assert len(out_logits) == len(target_sizes)
         assert target_sizes.shape[1] == 2
 
-        prob = out_logits.sigmoid()           #rel prob = F.softmax(out_logits, -1)
-        topk_values, topk_indexes = torch.topk(prob.view(out_logits.shape[0], -1), num_select, dim=1)
+        prob = out_logits.sigmoid()  #[bs,300,151]
+
+        #topk_values [bs,300]   topk_indexes[bs,300]
+        #prob.view(out_logits.shape[0], -1) 的作用是将 prob 的形状从 [batch_size, 300, 151] 转换成 [batch_size, 300 * 151]。
+        # 这样做的目的是将每个 query 的所有类别概率展平为一个长向量，以便在所有类别中选择最高的 num_select 个概率值。
+        prob = prob.view(out_logits.shape[0], -1)
+        topk_values, topk_indexes = torch.topk(prob, num_select, dim=1)
+        scores = topk_values
+
+        # 例如，假设 topk_indexes 中的一个值是 181，表示在展平后的数组中第 182 个元素的概率最高。由于每个 query 有 151 个类别，
+        # 所以可以通过以下计算得到原始的 query 索引和类别索引：Query 索引：181 // 91 = 1（整数除法，结果为 1）
+        # 类别索引：181 % 91 = 90（求余数，结果为 90）
+        # 因此，这个最高概率值对应于第二个 query（索引为 1，因为索引从 0 开始）的90类别（索引为 0）。
+        # 通过这种方式，topk_boxes 就能正确表示每个最高概率值所对应的 query 索引。
+        topk_boxes = topk_indexes // out_logits.shape[2]  #[bs,300]
+        labels = topk_indexes % out_logits.shape[2]       #[bs,300]
+        boxes = box_ops.box_cxcywh_to_xyxy(out_bbox) #[bs, 300, 4]
+        boxes = torch.gather(boxes, 1, topk_boxes.unsqueeze(-1).repeat(1,1,4))
+
+
+
+                # for batch_index in range(topk_boxes.shape[0]):
+        #     query_boxes_batch = topk_boxes[batch_index]  # 获取整个 batch 的 query 索引
+        #     unique_boxes_batch = torch.unique(query_boxes_batch)  # 获取唯一的索引值
+        #     if len(query_boxes_batch) != len(unique_boxes_batch):
+        #         print(f"Duplicate detected in batch {batch_index}")
+        #         assert(0)
+        
+        # and from relative [0, 1] to absolute [0, height] coordinates+
+        img_h, img_w = target_sizes.unbind(1)
+        scale_fct = torch.stack([img_w, img_h, img_w, img_h], dim=1)
+        boxes = boxes * scale_fct[:, None, :]
+
+        # scores:[bs,300]   labels:[bs,300]   boxes:[bs,300,4]
+        results = [{'scores': s, 'labels': l, 'boxes': b} for s, l, b in zip(scores, labels, boxes)]
+
+        return results
 
 
 
@@ -672,68 +716,7 @@ def build_DABRelTR(args):
                              losses=losses)
     
     criterion.to(device)
-    # postprocessors = {'bbox': PostProcess()}
+    postprocessors = {'bbox': PostProcess()}
 
-    #return model, criterion, postprocessors
-    return model, criterion, None
+    return model, criterion, postprocessors
 
-# def build_DABDETR(args):
-#     # the `num_classes` naming here is somewhat misleading.
-#     # it indeed corresponds to `max_obj_id + 1`, where max_obj_id
-#     # is the maximum id for a class in your dataset. For example,
-#     # COCO has a max_obj_id of 90, so we pass `num_classes` to be 91.
-#     # As another example, for a dataset that has a single class with id 1,
-#     # you should pass `num_classes` to be 2 (max_obj_id + 1).
-#     # For more details on this, check the following discussion
-#     # https://github.com/facebookresearch/detr/issues/108#issuecomment-650269223
-#     num_classes = 20 if args.dataset_file != 'coco' else 91
-#     if args.dataset_file == "coco_panoptic":
-#         # for panoptic, we just add a num_classes that is large enough to hold
-#         # max_obj_id + 1, but the exact value doesn't really matter
-#         num_classes = 250
-#     device = torch.device(args.device)
-
-#     backbone = build_backbone(args)
-
-#     transformer = build_transformer(args)
-
-#     model = DABDETR(
-#         backbone,
-#         transformer,
-#         num_classes=num_classes,
-#         num_queries=args.num_queries,
-#         num_dec_layers=args.dec_layers,
-#         aux_loss=args.aux_loss,
-#         iter_update=True,
-#         query_dim=4,
-#         random_refpoints_xy=args.random_refpoints_xy,
-#     )
-#     # if args.masks:
-#     #     model = DETRsegm(model, freeze_detr=(args.frozen_weights is not None))
-#     matcher = build_matcher(args)
-#     weight_dict = {'loss_ce': args.cls_loss_coef, 'loss_bbox': args.bbox_loss_coef}
-#     weight_dict['loss_giou'] = args.giou_loss_coef
-#     if args.masks:
-#         weight_dict["loss_mask"] = args.mask_loss_coef
-#         weight_dict["loss_dice"] = args.dice_loss_coef
-#     # TODO this is a hack
-#     if args.aux_loss:
-#         aux_weight_dict = {}
-#         for i in range(args.dec_layers - 1):
-#             aux_weight_dict.update({k + f'_{i}': v for k, v in weight_dict.items()})
-#         weight_dict.update(aux_weight_dict)
-
-#     losses = ['labels', 'boxes', 'cardinality']
-#     if args.masks:
-#         losses += ["masks"]
-#     criterion = SetCriterion(num_classes, matcher=matcher, weight_dict=weight_dict,
-#                              focal_alpha=args.focal_alpha, losses=losses)
-#     criterion.to(device)
-#     postprocessors = {'bbox': PostProcess(num_select=args.num_select)}
-#     if args.masks:
-#         postprocessors['segm'] = PostProcessSegm()
-#         if args.dataset_file == "coco_panoptic":
-#             is_thing_map = {i: i <= 90 for i in range(201)}
-#             postprocessors["panoptic"] = PostProcessPanoptic(is_thing_map, threshold=0.85)
-
-#     return model, criterion, postprocessors

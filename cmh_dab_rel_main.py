@@ -14,7 +14,7 @@ from models.DABRelTR.util import misc as utils  #import DABRelTR.util.misc
 from datasets import build_dataset, get_coco_api_from_dataset
 # from models import build_model
 from models.DABRelTR.DABRelTR import build_DABRelTR
-from cmh_dab_rel_engine import train_one_epoch
+from cmh_dab_rel_engine import train_one_epoch, evaluate
 
 def get_args_parser():
     parser = argparse.ArgumentParser('DAB-RelTR', add_help=False)
@@ -209,6 +209,8 @@ def main(args):
     # dataset_size = len(dataset_train)
     # train_size = int(0.3 * dataset_size)
 
+    dataset_train = torch.utils.data.Subset(dataset_train, indices=range(8))
+
     # # 使用切片操作来分割数据集
     # dataset_train = torch.utils.data.Subset(dataset_train, indices=range(train_size))
 
@@ -274,27 +276,27 @@ def main(args):
                     'args': args,
                 }, checkpoint_path)
 
-        # test_stats, coco_evaluator = evaluate(model, criterion, postprocessors, data_loader_val, base_ds, device, args)
+        test_stats, coco_evaluator = evaluate(model, criterion, postprocessors, data_loader_val, base_ds, device, args)
 
-        # log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
-        #              **{f'test_{k}': v for k, v in test_stats.items()},
-        #              'epoch': epoch,
-        #              'n_parameters': n_parameters}
+        log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
+                     **{f'test_{k}': v for k, v in test_stats.items()},
+                     'epoch': epoch,
+                     'n_parameters': n_parameters}
 
-        # if args.output_dir and utils.is_main_process():
-        #     with (output_dir / "log.txt").open("a") as f:
-        #         f.write(json.dumps(log_stats) + "\n")
+        if args.output_dir and utils.is_main_process():
+            with (output_dir / "log.txt").open("a") as f:
+                f.write(json.dumps(log_stats) + "\n")
 
-        #     # for evaluation logs
-        #     if coco_evaluator is not None:
-        #         (output_dir / 'eval').mkdir(exist_ok=True)
-        #         if "bbox" in coco_evaluator.coco_eval:
-        #             filenames = ['latest.pth']
-        #             if epoch % 50 == 0:
-        #                 filenames.append(f'{epoch:03}.pth')
-        #             for name in filenames:
-        #                 torch.save(coco_evaluator.coco_eval["bbox"].eval,
-        #                            output_dir / "eval" / name)
+            # for evaluation logs
+            if coco_evaluator is not None:
+                (output_dir / 'eval').mkdir(exist_ok=True)
+                if "bbox" in coco_evaluator.coco_eval:
+                    filenames = ['latest.pth']
+                    if epoch % 50 == 0:
+                        filenames.append(f'{epoch:03}.pth')
+                    for name in filenames:
+                        torch.save(coco_evaluator.coco_eval["bbox"].eval,
+                                   output_dir / "eval" / name)
 
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
