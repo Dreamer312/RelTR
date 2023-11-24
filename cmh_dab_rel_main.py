@@ -8,6 +8,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader, DistributedSampler
 import os, sys
+# os.environ['WANDB_MODE'] = 'disabled'
 from typing import Optional
 import datasets
 from models.DABRelTR.util import misc as utils  #import DABRelTR.util.misc 
@@ -24,8 +25,8 @@ def get_args_parser():
     parser.add_argument('--lr_backbone', default=1e-5, type=float)
     parser.add_argument('--batch_size', default=2, type=int)
     parser.add_argument('--weight_decay', default=1e-4, type=float)
-    parser.add_argument('--epochs', default=150, type=int)
-    parser.add_argument('--lr_drop', default=100, type=int)
+    parser.add_argument('--epochs', default=50, type=int)
+    parser.add_argument('--lr_drop', default=40, type=int)
     parser.add_argument('--clip_max_norm', default=0.1, type=float,
                         help='gradient clipping max norm')
 
@@ -68,7 +69,7 @@ def get_args_parser():
                         help="Number of attention heads inside the transformer's attentions")
     parser.add_argument('--num_entities', default=300, type=int,
                         help="Number of query slots")
-    parser.add_argument('--num_triplets', default=600, type=int,
+    parser.add_argument('--num_triplets', default=300, type=int,
                         help="Number of query slots")
     parser.add_argument('--pre_norm', action='store_true')
 
@@ -135,7 +136,7 @@ def get_args_parser():
     parser.add_argument('--start_epoch', default=0, type=int, metavar='N',
                         help='start epoch')
     parser.add_argument('--eval', action='store_true')
-    parser.add_argument('--num_workers', default=12, type=int)
+    parser.add_argument('--num_workers', default=8, type=int)
 
     # distributed training parameters
     parser.add_argument('--world_size', default=1, type=int,
@@ -165,11 +166,11 @@ def build_model_main(args):
 
 
 def main(args):
-    # if utils.is_main_process():
-    #     wandb.init(project="SGG", entity="dreamer0312")
-
     utils.init_distributed_mode(args)
     print("git:\n  {}\n".format(utils.get_sha()))
+
+    if int(os.environ['LOCAL_RANK']) == 0:
+        wandb.init(project="SGG", entity="dreamer0312")
 
     if args.frozen_weights is not None:
         assert args.masks, "Frozen training is meant for segmentation only"
@@ -185,8 +186,8 @@ def main(args):
 
 
     model, criterion, postprocessors = build_model_main(args)
-    #model, criterion, postprocessors = build_model(args)
-    print(model)
+
+    # print(model)
     model.to(device)
 
     model_without_ddp = model
@@ -211,8 +212,7 @@ def main(args):
     dataset_val = build_dataset(image_set='val', args=args)
 
     # dataset_size = len(dataset_train)
-    # train_size = int(0.3 * dataset_size)
-
+    # train_size = int(0.05 * dataset_size)
     # # 使用切片操作来分割数据集
     # dataset_train = torch.utils.data.Subset(dataset_train, indices=range(train_size))
 
@@ -262,23 +262,28 @@ def main(args):
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
             sampler_train.set_epoch(epoch)
-        # train_stats = train_one_epoch(model, criterion, data_loader_train, optimizer, device, epoch, args.clip_max_norm)
-        # lr_scheduler.step()
-        # if args.output_dir:
-        #     checkpoint_paths = [output_dir / 'checkpoint.pth'] # anti-crash
-        #     # extra checkpoint before LR drop and every 100 epochs
-        #     if (epoch + 1) % args.lr_drop == 0 or (epoch + 1) % 5 == 0:
-        #         checkpoint_paths.append(output_dir / f'checkpoint{epoch:04}.pth')
-        #     for checkpoint_path in checkpoint_paths:
-        #         utils.save_on_master({
-        #             'model': model_without_ddp.state_dict(),
-        #             'optimizer': optimizer.state_dict(),
-        #             'lr_scheduler': lr_scheduler.state_dict(),
-        #             'epoch': epoch,
-        #             'args': args,
-        #         }, checkpoint_path)
+        train_stats = train_one_epoch(model, criterion, data_loader_train, optimizer, device, epoch, args.clip_max_norm, wandb_logger = wandb)
+        lr_scheduler.step()
+        if args.output_dir:
+            checkpoint_paths = [output_dir / 'checkpoint.pth'] # anti-crash
+            # extra checkpoint before LR drop and every 100 epochs
+            if (epoch + 1) % args.lr_drop == 0 or (epoch + 1) % 5 == 0:
+                checkpoint_paths.append(output_dir / f'checkpoint{epoch:04}.pth')
+            for checkpoint_path in checkpoint_paths:
+                utils.save_on_master({
+                    'model': model_without_ddp.state_dict(),
+                    'optimizer': optimizer.state_dict(),
+                    'lr_scheduler': lr_scheduler.state_dict(),
+                    'epoch': epoch,
+                    'args': args,
+                }, checkpoint_path)
+        
+        # for k,v in train_stats.items():
+        #     print(f'{k}: {v}')
+        
+        # assert(0)
 
-        test_stats, coco_evaluator = evaluate(model, criterion, postprocessors, data_loader_val, base_ds, device, args)
+        test_stats, coco_evaluator = evaluate(model, criterion, postprocessors, data_loader_val, base_ds, device, args, wandb)
 
         log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
                      **{f'test_{k}': v for k, v in test_stats.items()},
@@ -289,16 +294,38 @@ def main(args):
             with (output_dir / "log.txt").open("a") as f:
                 f.write(json.dumps(log_stats) + "\n")
 
-            # for evaluation logs
-            if coco_evaluator is not None:
-                (output_dir / 'eval').mkdir(exist_ok=True)
-                if "bbox" in coco_evaluator.coco_eval:
-                    filenames = ['latest.pth']
-                    if epoch % 50 == 0:
-                        filenames.append(f'{epoch:03}.pth')
-                    for name in filenames:
-                        torch.save(coco_evaluator.coco_eval["bbox"].eval,
-                                   output_dir / "eval" / name)
+        
+        # for iou_type, coco_eval in coco_evaluator.coco_eval.items():
+        stats = coco_evaluator.coco_eval["bbox"].stats
+        coco_result = {
+                        f"AP": round(stats[0], 3),    # 平均精度 AP (IoU=0.50:0.95) - 所有区域大小
+                        f"AP50": round(stats[1], 3),  # 平均精度 AP (IoU=0.50) - 所有区域大小
+                        f"AP75": round(stats[2], 3),  # 平均精度 AP (IoU=0.75) - 所有区域大小
+                        f"APs": round(stats[3], 3),   # 平均精度 AP (IoU=0.50:0.95) - 小区域
+                        f"APm": round(stats[4], 3),   # 平均精度 AP (IoU=0.50:0.95) - 中等区域
+                        f"APl": round(stats[5], 3),   # 平均精度 AP (IoU=0.50:0.95) - 大区域
+                        f"AR1": round(stats[6], 3),   # 平均召回率 AR (最大检测数=1)
+                        f"AR10": round(stats[7], 3),  # 平均召回率 AR (最大检测数=10)
+                        f"AR100": round(stats[8], 3), # 平均召回率 AR (最大检测数=100)
+                        f"ARs": round(stats[9], 3),   # 平均召回率 AR (最大检测数=100) - 小区域
+                        f"ARm": round(stats[10], 3),  # 平均召回率 AR (最大检测数=100) - 中等区域
+                        f"ARl": round(stats[11], 3)   # 平均召回率 AR (最大检测数=100) - 大区域
+                    }
+        if int(os.environ['LOCAL_RANK']) == 0:
+            wandb.log(coco_result)
+        #print(coco_result)
+
+
+            # # for evaluation logs
+            # if coco_evaluator is not None:
+            #     (output_dir / 'eval').mkdir(exist_ok=True)
+            #     if "bbox" in coco_evaluator.coco_eval:
+            #         filenames = ['latest.pth']
+            #         if epoch % 50 == 0:
+            #             filenames.append(f'{epoch:03}.pth')
+            #         for name in filenames:
+            #             torch.save(coco_evaluator.coco_eval["bbox"].eval,
+            #                        output_dir / "eval" / name)
 
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
