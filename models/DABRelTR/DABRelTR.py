@@ -137,8 +137,10 @@ class DABRelTR(nn.Module):
             self.refpoint_embed.weight.data[:, :2].requires_grad = False
 
             self.refpoint_embed_triplets.weight.data[:, :2].uniform_(0,1)
-            self.refpoint_embed_triplets.weight.data[:, :2] = inverse_sigmoid(self.refpoint_embed.weight.data[:, :2])
+            #! 逆天bug
+            self.refpoint_embed_triplets.weight.data[:, :2] = inverse_sigmoid(self.refpoint_embed_triplets.weight.data[:, :2])
             self.refpoint_embed_triplets.weight.data[:, :2].requires_grad = False
+
 
         self.bbox_embed_sub = MLP(hidden_dim, hidden_dim, 4, 3)
         self.bbox_embed_obj = MLP(hidden_dim, hidden_dim, 4, 3)
@@ -229,10 +231,11 @@ class DABRelTR(nn.Module):
         #        so_mask:torch.Size([6, bs, 600, 2, 25, 40])    
         # }
         result = self.transformer(self.input_proj(src), 
-                                         mask, embedweight, 
-                                         self.refpoint_embed_triplets.weight, 
-                                         self.so_embed.weight, 
-                                         pos[-1])
+                                  mask, 
+                                  embedweight, 
+                                  self.refpoint_embed_triplets.weight, 
+                                  self.so_embed.weight, 
+                                  pos[-1])
         # hs torch.Size([6, bs, 300, 256]) 6应该是6层
         # references torch.Size([6, bs, 300, 4])
         
@@ -512,6 +515,20 @@ class SetCriterion(nn.Module):
         card_err = F.l1_loss(card_pred.float(), tgt_lengths.float())
         losses = {'cardinality_error': card_err}
         return losses
+    
+    # @torch.no_grad()
+    # def loss_cardinality(self, outputs, targets, indices, num_boxes):
+    #     """ Compute the cardinality error, ie the absolute error in the number of predicted non-empty boxes
+    #     This is not really a loss, it is intended for logging purposes only. It doesn't propagate gradients
+    #     """
+    #     pred_logits = outputs['pred_logits']
+    #     device = pred_logits.device
+    #     tgt_lengths = torch.as_tensor([len(v["labels"]) for v in targets], device=device)
+    #     # Count the number of predictions that are NOT "no-object" (which is the last class)
+    #     card_pred = (pred_logits.argmax(-1) != pred_logits.shape[-1] - 1).sum(1)
+    #     card_err = F.l1_loss(card_pred.float(), tgt_lengths.float())
+    #     losses = {'cardinality_error': card_err}
+    #     return losses
     
 
 

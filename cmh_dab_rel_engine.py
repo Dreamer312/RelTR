@@ -14,9 +14,9 @@ from datasets.coco_eval import CocoEvaluator
 
 from tqdm import tqdm
 from models.DABRelTR.util import misc as utils
-import wandb
+# import wandb
 import os
-os.environ['WANDB_MODE'] = 'disabled'
+# os.environ['WANDB_MODE'] = 'disabled'
 #os.environ['TORCH_DISTRIBUTED_DEBUG'] = 'INFO'
 
 #暂时是rel的uitl还没有用到
@@ -26,7 +26,7 @@ from lib.openimages_evaluation import task_evaluation_sg
 
 def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
                     data_loader: Iterable, optimizer: torch.optim.Optimizer,
-                    device: torch.device, epoch: int, max_norm: float = 0):
+                    device: torch.device, epoch: int, max_norm: float = 0, wandb_logger=None):
     model.train()
     # criterion.train()
     metric_logger = utils.MetricLogger(delimiter="  ")
@@ -45,9 +45,9 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
 
 
     # 在主进程上添加tqdm进度条
-    if is_main_process:
-        data_loader = tqdm(data_loader)
-        wandb.init(project="SGG", entity="dreamer0312")
+    # if is_main_process:
+    #     data_loader = tqdm(data_loader)
+    #     wandb.init(project="SGG", entity="dreamer0312")
 
     for samples, targets in metric_logger.log_every(data_loader, print_freq, header):
 
@@ -171,7 +171,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
         metric_logger.update(lr=optimizer.param_groups[0]["lr"])
 
         if utils.is_main_process():
-            wandb.log({
+            wandb_logger.log({
                 "loss": loss_value,
                 "class_error": loss_dict_reduced['class_error'],
                 "sub_error": loss_dict_reduced['sub_error'],
@@ -246,10 +246,10 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, arg
 
 
         # SGG eval
-        if args.dataset == 'vg':
-            evaluate_rel_batch_sig_baseline(outputs, targets, evaluator, evaluator_list)
-        else:
-            evaluate_rel_batch_oi(outputs, targets, all_results)
+        # if args.dataset == 'vg':
+        #     evaluate_rel_batch_sig_baseline(outputs, targets, evaluator, evaluator_list)
+        # else:
+        #     evaluate_rel_batch_oi(outputs, targets, all_results)
 
 
         # 标准的coco eval  与dab一样
@@ -259,13 +259,13 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, arg
         if coco_evaluator is not None:
             coco_evaluator.update(res)
 
-    if args.dataset == 'vg':
-        evaluator['sgdet'].print_stats()
-    else:
-        task_evaluation_sg.eval_rel_results(all_results, 100, do_val=True, do_vis=False)
+    # if args.dataset == 'vg':
+    #     evaluator['sgdet'].print_stats()
+    # else:
+    #     task_evaluation_sg.eval_rel_results(all_results, 100, do_val=True, do_vis=False)
 
-    if args.eval and args.dataset == 'vg':
-        calculate_mR_from_evaluator_list(evaluator_list, 'sgdet')
+    # if args.eval and args.dataset == 'vg':
+    #     calculate_mR_from_evaluator_list(evaluator_list, 'sgdet')
 
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
