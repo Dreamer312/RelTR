@@ -97,26 +97,29 @@ def evaluate_from_dict(gt_entry, pred_entry, mode, result_dict, multiple_preds=F
     :param kwargs: 
     :return: 
     """
-    gt_rels = gt_entry['gt_relations']
+    gt_rels = gt_entry['gt_relations']  #[一张图片三元组数量, 3]
 
 
-    gt_boxes = gt_entry['gt_boxes'].astype(float)
-    gt_classes = gt_entry['gt_classes']
+    gt_boxes = gt_entry['gt_boxes'].astype(float) #[10, 4]
+    gt_classes = gt_entry['gt_classes'] #[10]
 
-    rel_scores = pred_entry['rel_scores']
+    rel_scores = pred_entry['rel_scores']  #[300,51]
 
     # pred_rels = 1+rel_scores.argmax(1)
     # predicate_scores = rel_scores.max(1)
 
-    pred_rels = pred_entry['pred_rels']
-    predicate_scores = pred_entry['predicate_scores']
+    # pred_rels = pred_entry['pred_rels']
+    # predicate_scores = pred_entry['predicate_scores']
 
-    sub_boxes = pred_entry['sub_boxes']
-    obj_boxes = pred_entry['obj_boxes']
-    sub_score = pred_entry['sub_scores']
-    obj_score = pred_entry['obj_scores']
-    sub_class = pred_entry['sub_classes']
-    obj_class = pred_entry['obj_classes']
+    pred_rels = rel_scores.argmax(1)  #[300]
+    predicate_scores = rel_scores.max(1) #[300]
+
+    sub_boxes = pred_entry['sub_boxes']  #[300, 4]
+    obj_boxes = pred_entry['obj_boxes']  #[300, 4]
+    sub_score = pred_entry['sub_scores'] #[300]
+    obj_score = pred_entry['obj_scores'] #[300]
+    sub_class = pred_entry['sub_classes'] #[300]
+    obj_class = pred_entry['obj_classes'] #[300]
 
     # print(sub_class.shape)
     # print(obj_class.shape)
@@ -170,16 +173,16 @@ def evaluate_recall(gt_rels, gt_boxes, gt_classes,
     # Exclude self rels
     # assert np.all(pred_rels[:,0] != pred_rels[:,ĺeftright])
 
-    pred_triplets = np.column_stack((sub_class, pred_rels, obj_class))
-    pred_triplet_boxes =  np.column_stack((sub_boxes, obj_boxes))
-    relation_scores = np.column_stack((sub_score, obj_score, predicate_scores))  #TODO!!!! do not * 0.1 finally
+    pred_triplets = np.column_stack((sub_class, pred_rels, obj_class)) #[300,3]
+    pred_triplet_boxes =  np.column_stack((sub_boxes, obj_boxes))      #[300,8]
+    relation_scores = np.column_stack((sub_score, obj_score, predicate_scores))  #[300,3] #TODO!!!! do not * 0.1 finally
 
 
-    sorted_scores = relation_scores.prod(1)
+    sorted_scores = relation_scores.prod(1) #[300,]          prod 按dim相乘，这里相当于将sub rel obj的概率相乘
     pred_triplets = pred_triplets[sorted_scores.argsort()[::-1],:]
-    pred_triplet_boxes = pred_triplet_boxes[sorted_scores.argsort()[::-1],:]
-    relation_scores = relation_scores[sorted_scores.argsort()[::-1],:]
-    scores_overall = relation_scores.prod(1)
+    pred_triplet_boxes = pred_triplet_boxes[sorted_scores.argsort()[::-1],:]  #sorted_scores.argsort()[::-1] 排序，降序，然后取得排序后的pred_triplet_boxes
+    relation_scores = relation_scores[sorted_scores.argsort()[::-1],:]        #[300,3]
+    scores_overall = relation_scores.prod(1)  #[300,]  
 
 
     if not np.all(scores_overall[1:] <= scores_overall[:-1] + 1e-5):

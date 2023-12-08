@@ -788,7 +788,6 @@ class TransformerDecoderLayer(nn.Module):
         k_content_sub_dc = self.sub_dc_ca_kcontent_proj(memory)  # torch.Size([1000, bs, 256])  
         k_pos_sub_dc = self.sub_dc_ca_kpos_proj(pos) # torch.Size([1000, bs, 256])  这个pos是给backbone特征图的
         v_sub_dc = self.sub_dc_ca_v_proj(memory)
-
         num_queries_sub, bs, n_model = q_content_sub_dc.shape # 600 bs 256
         hw_sub_dc, _, _ = k_content_sub_dc.shape
 

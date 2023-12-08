@@ -205,6 +205,7 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, arg
     # initilize evaluator
     # TODO merge evaluation programs
     if args.dataset == 'vg':
+        #evaluator 字典 {sgdet:..., sgcls:..., predcls:...}
         evaluator = BasicSceneGraphEvaluator.all_modes(multiple_preds=False)
         if args.eval:
             evaluator_list = []
@@ -246,8 +247,8 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, arg
 
 
         # SGG eval
-        # if args.dataset == 'vg':
-        #     evaluate_rel_batch_sig_baseline(outputs, targets, evaluator, evaluator_list)
+        if args.dataset == 'vg':
+            evaluate_rel_batch(outputs, targets, evaluator, evaluator_list)
         # else:
         #     evaluate_rel_batch_oi(outputs, targets, all_results)
 
@@ -259,8 +260,8 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, arg
         if coco_evaluator is not None:
             coco_evaluator.update(res)
 
-    # if args.dataset == 'vg':
-    #     evaluator['sgdet'].print_stats()
+    if args.dataset == 'vg':
+        evaluator['sgdet'].print_stats()
     # else:
     #     task_evaluation_sg.eval_rel_results(all_results, 100, do_val=True, do_vis=False)
 
@@ -447,7 +448,91 @@ def evaluate_rel_batch_sig_baseline(outputs, targets, evaluator, evaluator_list)
 
 
 
+def evaluate_rel_batch(outputs, targets, evaluator, evaluator_list):
 
+    #TODO
+    for batch, target in enumerate(targets):
+        target_bboxes_scaled = rescale_bboxes(target['boxes'].cpu(), torch.flip(target['orig_size'],dims=[0]).cpu()).clone().numpy() # recovered boxes with original size
+
+        gt_entry = {'gt_classes': target['labels'].cpu().clone().numpy(),
+                    'gt_relations': target['rel_annotations'].cpu().clone().numpy(),
+                    'gt_boxes': target_bboxes_scaled}
+
+        sub_bboxes_scaled = rescale_bboxes(outputs['sub_boxes'][batch].cpu(), torch.flip(target['orig_size'],dims=[0]).cpu()).clone().numpy()
+        obj_bboxes_scaled = rescale_bboxes(outputs['obj_boxes'][batch].cpu(), torch.flip(target['orig_size'],dims=[0]).cpu()).clone().numpy()
+
+        # pred_sub_scores, pred_sub_classes = torch.max(outputs['sub_logits'][batch].softmax(-1)[:, :-1], dim=1)
+        # pred_obj_scores, pred_obj_classes = torch.max(outputs['obj_logits'][batch].softmax(-1)[:, :-1], dim=1)
+
+        pred_sub_scores, pred_sub_classes = torch.max(outputs['sub_logits'][batch].softmax(-1)[:, :], dim=1)
+        pred_obj_scores, pred_obj_classes = torch.max(outputs['obj_logits'][batch].softmax(-1)[:, :], dim=1)
+
+        # if evaluator['sgdet'].rel_freq is not None :
+        #     counterfact_rel_logits = torch.tensor(evaluator['sgdet'].rel_freq).to(outputs['rel_logits'].device)
+        #     rel_scores = torch.softmax(outputs['rel_logits'][batch][:, 1:-1]-counterfact_rel_logits, dim=1)
+        # else:
+        #     rel_scores = outputs['rel_logits'][batch][:, 1:-1].softmax(-1)
+        #rel_scores = outputs['rel_logits'][batch][:, 1:-1].softmax(-1) #[300,50]
+
+        rel_scores = outputs['rel_logits'][batch].sigmoid() #[300, 51]
+
+        ###################################################################A-relation-A
+        #mask = torch.logical_and((pred_sub_classes - pred_obj_classes != 0).cpu(), torch.logical_and(pred_obj_scores >= 0.002, pred_sub_scores >= 0.002).cpu())
+        mask = (pred_sub_classes - pred_obj_classes != 0).cpu()
+        diff_pair_num = mask.sum()
+        #print(f'diff_pair_num {diff_pair_num}')
+
+        if diff_pair_num <= 298:
+            sub_bboxes_scaled = sub_bboxes_scaled[mask]
+            pred_sub_classes = pred_sub_classes[mask]
+            pred_sub_scores = pred_sub_scores[mask]
+            obj_bboxes_scaled = obj_bboxes_scaled[mask]
+            pred_obj_classes = pred_obj_classes[mask]
+            pred_obj_scores = pred_obj_scores[mask]
+            rel_scores = rel_scores[mask]
+
+            padded_indices = (pred_sub_scores + pred_obj_scores).sort(descending=True)[1][: mask.shape[0] - mask.sum()].cpu()
+            padded_sub_bboxes = sub_bboxes_scaled[padded_indices]
+            padded_sub_class = pred_sub_classes[padded_indices]
+            padded_sub_scores = pred_sub_scores[padded_indices]
+            padded_obj_bboxes = obj_bboxes_scaled[padded_indices]
+            padded_obj_class = pred_obj_classes[padded_indices]
+            padded_obj_scores = pred_obj_scores[padded_indices]
+            padded_rel_scores = rel_scores[padded_indices]
+            max_value_indices = torch.max(padded_rel_scores, dim=1)[1]
+            for i, idx in enumerate(max_value_indices):
+                second_max_index = (-padded_rel_scores[i]).sort()[1][1]
+                padded_rel_scores[i, second_max_index] += padded_rel_scores[i, idx]*0.2
+                padded_rel_scores[i, idx] = 0
+
+            sub_bboxes_scaled = np.concatenate([sub_bboxes_scaled, padded_sub_bboxes], axis=0)
+            pred_sub_classes = torch.cat([pred_sub_classes, padded_sub_class], dim=0)
+            pred_sub_scores = torch.cat([pred_sub_scores, padded_sub_scores],dim=0)
+            obj_bboxes_scaled = np.concatenate([obj_bboxes_scaled, padded_obj_bboxes], axis=0)
+            pred_obj_classes = torch.cat([pred_obj_classes, padded_obj_class], dim=0)
+            pred_obj_scores = torch.cat([pred_obj_scores, padded_obj_scores],dim=0)
+            rel_scores = torch.cat([rel_scores, padded_rel_scores],dim=0)
+        ###################################################################A-relation-A
+
+        #
+        pred_entry = {'sub_boxes': sub_bboxes_scaled,
+                      'sub_classes': pred_sub_classes.cpu().clone().numpy(),
+                      'sub_scores': pred_sub_scores.cpu().clone().numpy(),
+                      'obj_boxes': obj_bboxes_scaled,
+                      'obj_classes': pred_obj_classes.cpu().clone().numpy(),
+                      'obj_scores': pred_obj_scores.cpu().clone().numpy(),
+                      'rel_scores': rel_scores.cpu().clone().numpy()}
+
+        evaluator['sgdet'].evaluate_scene_graph_entry(gt_entry, pred_entry)
+
+        if evaluator_list is not None:
+            for pred_id, _, evaluator_rel in evaluator_list:
+                gt_entry_rel = gt_entry.copy()
+                mask = np.in1d(gt_entry_rel['gt_relations'][:, -1], pred_id)
+                gt_entry_rel['gt_relations'] = gt_entry_rel['gt_relations'][mask, :]
+                if gt_entry_rel['gt_relations'].shape[0] == 0:
+                    continue
+                evaluator_rel['sgdet'].evaluate_scene_graph_entry(gt_entry_rel, pred_entry)
 
 
 
