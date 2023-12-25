@@ -284,6 +284,7 @@
 
 #====================================================================
 #======================sgdet============================
+#Wdb66
 # Epoch21后的结果
 # R@20: 0.164913
 # R@50: 0.210882
@@ -354,6 +355,7 @@
 
 
 #====================================================================
+# WDB67
 # wandb sync /home/cmh/cmh/projects/detrs/RelTR/wandb/offline-run-20231202_172008-dv0u8l8x
 # torchrun --nproc_per_node=8 \
 #          --standalone \
@@ -398,17 +400,45 @@
 #             --resume='/home/cmh/cmh/projects/detrs/RelTR/checkpoint_dab_rel_5/checkpoint0029.pth'
 
 
-export CUDA_VISIBLE_DEVICES=1
-torchrun --nproc_per_node=1 \
+# export CUDA_VISIBLE_DEVICES=1
+# torchrun --nproc_per_node=1 \
+#          --standalone \
+#          --nnodes=1 \
+#          cmh_dab_rel_main.py \
+#             --dataset vg \
+#             --img_folder /home/cmh/cmh/projects/detrs/RelTR/data/vg/images/ \
+#             --ann_path /home/cmh/cmh/projects/detrs/RelTR/data/vg/ \
+#             --modelname dab_detr \
+#             --batch_size=8 \
+#             --output_dir ./checkpoint_dab_rel_5 \
+#             --epochs 30 \
+#             --lr_drop 20 \
+#             --random_refpoints_xy \
+#             --dropout=0.1 \
+#             --num_entities=200 \
+#             --num_triplets=300 \
+#             --num_select=200 \
+#             --set_cost_class=2 \
+#             --eval \
+#             --resume='/home/cmh/cmh/projects/detrs/RelTR/checkpoints/checkpoint_dab_rel_5/checkpoint0024.pth'
+#====================================================================
+
+
+
+
+
+#====================================================================
+export CUDA_VISIBLE_DEVICES=4,5,6,7
+torchrun --nproc_per_node=4 \
          --standalone \
          --nnodes=1 \
-         cmh_dab_rel_main.py \
+         cmh_dab_rel_main_dab_rel_softmax.py \
             --dataset vg \
             --img_folder /home/cmh/cmh/projects/detrs/RelTR/data/vg/images/ \
             --ann_path /home/cmh/cmh/projects/detrs/RelTR/data/vg/ \
             --modelname dab_detr \
-            --batch_size=1 \
-            --output_dir ./checkpoint_dab_rel_5 \
+            --batch_size=4 \
+            --output_dir ./checkpoint_dab_rel_softmax_1 \
             --epochs 30 \
             --lr_drop 20 \
             --random_refpoints_xy \
@@ -417,5 +447,4 @@ torchrun --nproc_per_node=1 \
             --num_triplets=300 \
             --num_select=200 \
             --set_cost_class=2 \
-            --resume='/home/cmh/cmh/projects/detrs/RelTR/checkpoints/checkpoint_dab_rel_5/checkpoint0029.pth'
 #====================================================================

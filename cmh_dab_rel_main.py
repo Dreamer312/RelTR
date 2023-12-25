@@ -9,7 +9,6 @@ import torch
 from torch.utils.data import DataLoader, DistributedSampler
 import os, sys
 from typing import Optional
-import datasets
 from models.DABRelTR.util import misc as utils  #import DABRelTR.util.misc 
 from datasets import build_dataset, get_coco_api_from_dataset
 # from models import build_model
@@ -157,13 +156,14 @@ def get_args_parser():
 
 def build_model_main(args):
     if args.modelname.lower() == 'dab_detr':
-        model, criterion, postprocessors = build_DABRelTR(args)
+        model, criterion, postprocessors, postprocessors_sub, postprocessors_obj = build_DABRelTR(args)
     # elif args.modelname.lower() == 'dab_deformable_detr':
     #     model, criterion, postprocessors = build_dab_deformable_detr(args)
     else:
         raise NotImplementedError
 
-    return model, criterion, postprocessors
+    #return model, criterion, postprocessors
+    return model, criterion, postprocessors, postprocessors_sub, postprocessors_obj
 
 
 def main(args):
@@ -187,7 +187,7 @@ def main(args):
     random.seed(seed)
 
 
-    model, criterion, postprocessors = build_model_main(args)
+    model, criterion, postprocessors, postprocessors_sub, postprocessors_obj = build_model_main(args)
     #model, criterion, postprocessors = build_model(args)
     print(model)
     model.to(device)
@@ -260,11 +260,11 @@ def main(args):
             utils.save_on_master(coco_evaluator.coco_eval["bbox"].eval, output_dir / "eval.pth")
         return
     
-    valid = True
-    if valid and not args.eval:
-        print(f"valid mode, It is the checkpoint{checkpoint['epoch']}")
-        test_stats, coco_evaluator = evaluate(model, criterion, postprocessors, data_loader_val, base_ds, device, args)
-        return
+    # valid = True
+    # if valid and not args.eval:
+    #     print(f"valid mode, It is the checkpoint{checkpoint['epoch']}")
+    #     test_stats, coco_evaluator = evaluate(model, criterion, postprocessors, postprocessors_sub, postprocessors_obj, data_loader_val, base_ds, device, args)
+    #     return
     
     print("Start training")
     start_time = time.time()

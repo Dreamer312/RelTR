@@ -750,7 +750,7 @@ class TransformerDecoderLayer(nn.Module):
 
 
 
-        #这个是reltr的实现，注意tgt_sub和tgt_obj都加了相同的位置编码triplet_pos，但是在我这里先使用了不同的编码
+        #todo这个是reltr的实现，注意tgt_sub和tgt_obj都加了相同的位置编码triplet_pos，但是在我这里先使用了不同的编码
         # q_sub = k_sub = self.with_pos_embed(self.with_pos_embed(tgt_sub, triplet_pos), so_pos[0])  #so_pos [2,256]
         # q_obj = k_obj = self.with_pos_embed(self.with_pos_embed(tgt_obj, triplet_pos), so_pos[1])
 

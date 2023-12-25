@@ -13,16 +13,22 @@ import torch
 from datasets.coco_eval import CocoEvaluator
 
 from tqdm import tqdm
-import util.misc as utils
-from util.box_ops import rescale_bboxes
+from models.DABRelTR.util import misc as utils
+# import wandb
+import os
+# os.environ['WANDB_MODE'] = 'disabled'
+#os.environ['TORCH_DISTRIBUTED_DEBUG'] = 'INFO'
+
+#暂时是rel的uitl还没有用到
+from models.DABRelTR.util.box_ops import rescale_bboxes
 from lib.evaluation.sg_eval import BasicSceneGraphEvaluator, calculate_mR_from_evaluator_list
 from lib.openimages_evaluation import task_evaluation_sg
 
 def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
                     data_loader: Iterable, optimizer: torch.optim.Optimizer,
-                    device: torch.device, epoch: int, max_norm: float = 0):
+                    device: torch.device, epoch: int, max_norm: float = 0, wandb_logger=None):
     model.train()
-    criterion.train()
+    # criterion.train()
     metric_logger = utils.MetricLogger(delimiter="  ")
     metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
     metric_logger.add_meter('class_error', utils.SmoothedValue(window_size=1, fmt='{value:.2f}'))
@@ -35,76 +41,70 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
 
     is_main_process = not is_initialized() or get_rank() == 0
 
+
+
+
     # 在主进程上添加tqdm进度条
-    if is_main_process:
-        data_loader = tqdm(data_loader)
-    
-
-
-
-
-    # min_label = float('inf')
-    # max_label = float('-inf')
-    # min_rel_anno = float('inf')
-    # max_rel_anno = float('-inf')
-    # for samples, targets in data_loader:  # 假设data_loader是你的数据加载器
-
-    #     # 更新labels的最小和最大值
-    #     min_label = min(min_label, torch.min(targets[0]['labels']).item())
-    #     max_label = max(max_label, torch.max(targets[0]['labels']).item())
-
-    #     # 更新rel_annotations的第三个数的最小和最大值
-    #     third_elements = targets[0]['rel_annotations'][:, 2]  # 获取所有rel_annotations的第三个数
-    #     min_rel_anno = min(min_rel_anno, torch.min(third_elements).item())
-    #     max_rel_anno = max(max_rel_anno, torch.max(third_elements).item())
-    # print(f'Minimum label: {min_label}')
-    # print(f'Maximum label: {max_label}')
-    # print(f'Minimum third element in rel_annotations: {min_rel_anno}')
-    # print(f'Maximum third element in rel_annotations: {max_rel_anno}')
-
-    # assert(0)
-
+    # if is_main_process:
+    #     data_loader = tqdm(data_loader)
+    #     wandb.init(project="SGG", entity="dreamer0312")
 
     for samples, targets in metric_logger.log_every(data_loader, print_freq, header):
 
 
-        samples = samples.to(device) # torch.Size([bs, 3, 800, 1280])  mask. torch.Size([bs, 800, 1280])
-
-        # 0:{'boxes': tensor([[0.4970, 0.3808, 0.9140, 0.5694],
-        # [0.5310, 0.1228, 0.1740, 0.0747],
-        # [0.3780, 0.4448, 0.0960, 0.0498],
-        # [0.2710, 0.0907, 0.1540, 0.1032],
-        # [0.5330, 0.4591, 0.8980, 0.7189],
-        # [0.4580, 0.0783, 0.1880, 0.1352],
-        # [0.2520, 0.4039, 0.1040, 0.2313],
-        # [0.7370, 0.7224, 0.1740, 0.1993],
-        # [0.7250, 0.7082, 0.2620, 0.2278],
-        # [0.4880, 0.3256, 0.1120, 0.0819],
-        # [0.4320, 0.4751, 0.5560, 0.1815],
-        # [0.1010, 0.4288, 0.0460, 0.1530]]), 'labels': tensor([ 22,  76,  77,  90,  95,  95, 127, 130, 144, 145, 147, 147]), 'image_id': tensor([2389878]), 'area': tensor([342470.6562,   8593.3428,   3204.3765,  10581.4590, 424867.5625,
-        #  16803.0957,  16003.1699,  22973.2734,  39621.9961,   6160.8228,
-        #  66786.6875,   4771.4800]), 'iscrowd': tensor([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]), 'orig_size': tensor([281, 500]), 'size': tensor([ 608, 1081]), 'rel_annotations': tensor([[ 2,  4, 29],
-        # [ 4,  6, 20],
-        # [ 4,  8, 20],
-        # [ 4,  9, 20]])}
-
-        # 3:{boxes:[11,4], labels:[11], image_id:[2392873], area:[11], iscrowd, orig_size:[375,500], size:[704,938], relation:torch.Size([10, 3]) }
-
+        samples = samples.to(device) # torch.Size([4, 3, h:800, w:1280]))  mask. torch.Size([bs, 800, 1280])
 
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
+        #targets是list，长度是bs
+        # 0:{'boxes': tensor([[0.1987, 0.7031, 0.3291, 0.2057],
+    #     [0.2383, 0.5202, 0.4180, 0.9596],
+    #     [0.9409, 0.8132, 0.1182, 0.1029],
+    #     [0.8496, 0.8236, 0.1191, 0.0768],
+    #     [0.3140, 0.1445, 0.1982, 0.2057],
+    #     [0.3022, 0.6758, 0.1182, 0.1484],
+    #     [0.3291, 0.6549, 0.1152, 0.1484],
+    #     [0.4512, 0.6107, 0.1582, 0.1016],
+    #     [0.5903, 0.3848, 0.0205, 0.2279],
+    #     [0.1509, 0.1068, 0.1475, 0.0469],
+    #     [0.2354, 0.6283, 0.3398, 0.7435],
+    #     [0.5806, 0.3783, 0.1475, 0.2565],
+    #     [0.2549, 0.4629, 0.0586, 0.1107],
+    #     [0.2632, 0.5189, 0.4658, 0.9544]], device='cuda:0'), 'labels': tensor([  3,  20,  49,  49,  57,  58,  59,  97,  99, 105, 111, 115,  77,  78],
+    #    device='cuda:0'), 'image_id': tensor([498334], device='cuda:0'), 'area': tensor([ 69330.7344, 410723.9688,  12446.6152,   9372.3965,  41763.0234,
+    #      17960.9375,  17515.6250,  16453.1250,   4785.1562,   7078.1250,
+    #     258734.3906,  38733.0742,   6640.6250, 455261.7188], device='cuda:0'), 'iscrowd': tensor([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], device='cuda:0'), 'orig_size': tensor([ 768, 1024], device='cuda:0'), 'size': tensor([ 800, 1280], device='cuda:0'), 'rel_annotations': tensor([[ 1,  0, 20],
+    #     [11,  8, 50],
+    #     [12, 10, 31],
+    #     [13,  5, 20],
+    #     [13,  7, 21]], device='cuda:0')}
+    #     ............
+    #     3:{{'boxes': size[6,4], 'labels': tensor([ 22,  26,  64, 130, 142,  26]), 'image_id': tensor([498337]), 'area': tensor([106005.2734,  23460.5098,  39151.1641,   3074.5740,  19535.8594,
+        #   25470.5020]), 'iscrowd': tensor([0, 0, 0, 0, 0, 0], device='cuda:0'), 'orig_size': tensor([276, 467], device='cuda:0'), 'size': tensor([ 800, 1280], device='cuda:0'), 
+        # 'rel_annotations': tensor([[ 0,  2, 29],[ 1,  0, 29], [ 2,  0, 29]], device='cuda:0')}}
+
+
+
+
+
+
 
         outputs = model(samples)
         #outputs:{
-        # pred_logits: torch.Size([bs, 100, 152])
-        # pred_boxes: torch.Size([bs, 100, 4])
-        # sub_logits: torch.Size([bs, 200, 152])
-        # sub_boxes:torch.Size([bs, 200, 4])
-        # obj_logits: torch.Size([bs, 200, 152])
-        # obj_boxes: torch.Size([bs, 200, 4])
-        # rel_logits: torch.Size([bs, 200, 52])
+        # pred_logits: torch.Size([bs, 300, 151])
+        # pred_boxes: torch.Size([bs, 300, 4])
+        # sub_logits: torch.Size([bs, 600, 151])
+        # sub_boxes:torch.Size([bs, 600, 4])
+        # obj_logits: torch.Size([bs, 600, 151])
+        # obj_boxes: torch.Size([bs, 600, 4])
+        # rel_logits: torch.Size([bs, 600, 51])
         #字典队列，长度5[{...},{内容和上面一样}]
         # }
+
         loss_dict = criterion(outputs, targets)
+
+
+
+
         #{'loss_ce': tensor(2.9685, device='cuda:0', grad_fn=<DivBackward0>), 
         # 'class_error': tensor(89.3617, device='cuda:0'), 
         # 'sub_error': tensor(93.5484, device='cuda:0'), 
@@ -159,6 +159,10 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
         optimizer.step()
 
+        # for name, param in model.named_parameters():
+        #     if param.grad is None:
+        #         print(name, 'has no grad')
+        # assert(0)
         metric_logger.update(loss=loss_value, **loss_dict_reduced_scaled, **loss_dict_reduced_unscaled)
         metric_logger.update(class_error=loss_dict_reduced['class_error'])
         metric_logger.update(sub_error=loss_dict_reduced['sub_error'])
@@ -166,11 +170,25 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
         metric_logger.update(rel_error=loss_dict_reduced['rel_error'])
         metric_logger.update(lr=optimizer.param_groups[0]["lr"])
 
+        if utils.is_main_process():
+            wandb_logger.log({
+                "loss": loss_value,
+                "class_error": loss_dict_reduced['class_error'],
+                "sub_error": loss_dict_reduced['sub_error'],
+                "obj_error": loss_dict_reduced['obj_error'],
+                "rel_error": loss_dict_reduced['rel_error'],
+                "lr": optimizer.param_groups[0]["lr"],
+                **loss_dict_reduced_unscaled,
+                **loss_dict_reduced_scaled
+            })
+
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
     print("Averaged stats:", metric_logger)
 
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
+
+
 
 @torch.no_grad()
 def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, args):
@@ -187,6 +205,7 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, arg
     # initilize evaluator
     # TODO merge evaluation programs
     if args.dataset == 'vg':
+        #evaluator 字典 {sgdet:..., sgcls:..., predcls:...}
         evaluator = BasicSceneGraphEvaluator.all_modes(multiple_preds=False)
         if args.eval:
             evaluator_list = []
@@ -201,10 +220,13 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, arg
 
     iou_types = tuple(k for k in ('segm', 'bbox') if k in postprocessors.keys())
     coco_evaluator = CocoEvaluator(base_ds, iou_types)
+    # coco_evaluator_sub = CocoEvaluator(base_ds, iou_types)
+    # coco_evaluator_obj = CocoEvaluator(base_ds, iou_types)
 
-    for samples, targets in metric_logger.log_every(data_loader, 500, header):
+    for samples, targets in metric_logger.log_every(data_loader, 100, header):
 
         samples = samples.to(device)
+        #* targets = [{k: to_device(v, device) for k, v in t.items()} for t in targets] DAB版
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
         outputs = model(samples)
@@ -225,17 +247,24 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, arg
         metric_logger.update(obj_error=loss_dict_reduced['obj_error'])
         metric_logger.update(rel_error=loss_dict_reduced['rel_error'])
 
+
+        # SGG eval
         if args.dataset == 'vg':
             evaluate_rel_batch(outputs, targets, evaluator, evaluator_list)
-        else:
-            evaluate_rel_batch_oi(outputs, targets, all_results)
+        # else:
+        #     evaluate_rel_batch_oi(outputs, targets, all_results)
 
+
+        # 标准的coco eval  与dab一样
         orig_target_sizes = torch.stack([t["orig_size"] for t in targets], dim=0)
         results = postprocessors['bbox'](outputs, orig_target_sizes)
-
         res = {target['image_id'].item(): output for target, output in zip(targets, results)}
         if coco_evaluator is not None:
             coco_evaluator.update(res)
+
+        # orig_target_sizes = torch.stack([t["orig_size"] for t in targets], dim=0)
+        # results_sub = postprocessors_sub(outputs, orig_target_sizes)
+
 
     if args.dataset == 'vg':
         evaluator['sgdet'].print_stats()
@@ -263,39 +292,6 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, arg
 
     return stats, coco_evaluator
 
-# def evaluate_rel_batch(outputs, targets, evaluator, evaluator_list):
-#     for batch, target in enumerate(targets):
-#         target_bboxes_scaled = rescale_bboxes(target['boxes'].cpu(), torch.flip(target['orig_size'],dims=[0]).cpu()).clone().numpy() # recovered boxes with original size
-
-#         gt_entry = {'gt_classes': target['labels'].cpu().clone().numpy(),
-#                     'gt_relations': target['rel_annotations'].cpu().clone().numpy(),
-#                     'gt_boxes': target_bboxes_scaled}
-
-#         sub_bboxes_scaled = rescale_bboxes(outputs['sub_boxes'][batch].cpu(), torch.flip(target['orig_size'],dims=[0]).cpu()).clone().numpy()
-#         obj_bboxes_scaled = rescale_bboxes(outputs['obj_boxes'][batch].cpu(), torch.flip(target['orig_size'],dims=[0]).cpu()).clone().numpy()
-
-#         pred_sub_scores, pred_sub_classes = torch.max(outputs['sub_logits'][batch].softmax(-1)[:, :-1], dim=1)
-#         pred_obj_scores, pred_obj_classes = torch.max(outputs['obj_logits'][batch].softmax(-1)[:, :-1], dim=1)
-#         rel_scores = outputs['rel_logits'][batch][:,1:-1].softmax(-1)
-
-#         pred_entry = {'sub_boxes': sub_bboxes_scaled,
-#                       'sub_classes': pred_sub_classes.cpu().clone().numpy(),
-#                       'sub_scores': pred_sub_scores.cpu().clone().numpy(),
-#                       'obj_boxes': obj_bboxes_scaled,
-#                       'obj_classes': pred_obj_classes.cpu().clone().numpy(),
-#                       'obj_scores': pred_obj_scores.cpu().clone().numpy(),
-#                       'rel_scores': rel_scores.cpu().clone().numpy()}
-
-#         evaluator['sgdet'].evaluate_scene_graph_entry(gt_entry, pred_entry)
-
-#         if evaluator_list is not None:
-#             for pred_id, _, evaluator_rel in evaluator_list:
-#                 gt_entry_rel = gt_entry.copy()
-#                 mask = np.in1d(gt_entry_rel['gt_relations'][:, -1], pred_id)
-#                 gt_entry_rel['gt_relations'] = gt_entry_rel['gt_relations'][mask, :]
-#                 if gt_entry_rel['gt_relations'].shape[0] == 0:
-#                     continue
-#                 evaluator_rel['sgdet'].evaluate_scene_graph_entry(gt_entry_rel, pred_entry)
 
 def evaluate_rel_batch(outputs, targets, evaluator, evaluator_list):
 
@@ -310,19 +306,17 @@ def evaluate_rel_batch(outputs, targets, evaluator, evaluator_list):
         sub_bboxes_scaled = rescale_bboxes(outputs['sub_boxes'][batch].cpu(), torch.flip(target['orig_size'],dims=[0]).cpu()).clone().numpy()
         obj_bboxes_scaled = rescale_bboxes(outputs['obj_boxes'][batch].cpu(), torch.flip(target['orig_size'],dims=[0]).cpu()).clone().numpy()
 
-        pred_sub_scores, pred_sub_classes = torch.max(outputs['sub_logits'][batch].softmax(-1)[:, :-1], dim=1)
-        pred_obj_scores, pred_obj_classes = torch.max(outputs['obj_logits'][batch].softmax(-1)[:, :-1], dim=1)
+        # pred_sub_scores, pred_sub_classes = torch.max(outputs['sub_logits'][batch].softmax(-1)[:, :-1], dim=1)
+        # pred_obj_scores, pred_obj_classes = torch.max(outputs['obj_logits'][batch].softmax(-1)[:, :-1], dim=1)
 
-        # if evaluator['sgdet'].rel_freq is not None :
-        #     counterfact_rel_logits = torch.tensor(evaluator['sgdet'].rel_freq).to(outputs['rel_logits'].device)
-        #     rel_scores = torch.softmax(outputs['rel_logits'][batch][:, 1:-1]-counterfact_rel_logits, dim=1)
-        # else:
-        #     rel_scores = outputs['rel_logits'][batch][:, 1:-1].softmax(-1)
+        pred_sub_scores, pred_sub_classes = torch.max(outputs['sub_logits'][batch].softmax(-1)[:, :], dim=1)
+        pred_obj_scores, pred_obj_classes = torch.max(outputs['obj_logits'][batch].softmax(-1)[:, :], dim=1)
+
+
         rel_scores = outputs['rel_logits'][batch][:, 1:-1].softmax(-1)
         ###################################################################A-relation-A
-        #mask = torch.logical_and((pred_sub_classes - pred_obj_classes != 0).cpu(), torch.logical_and(pred_obj_scores >= 0.002, pred_sub_scores >= 0.002).cpu())
         mask = (pred_sub_classes - pred_obj_classes != 0).cpu()
-        if mask.sum() <= 198:
+        if mask.sum() <= 298:
             sub_bboxes_scaled = sub_bboxes_scaled[mask]
             pred_sub_classes = pred_sub_classes[mask]
             pred_sub_scores = pred_sub_scores[mask]
@@ -373,40 +367,3 @@ def evaluate_rel_batch(outputs, targets, evaluator, evaluator_list):
                 if gt_entry_rel['gt_relations'].shape[0] == 0:
                     continue
                 evaluator_rel['sgdet'].evaluate_scene_graph_entry(gt_entry_rel, pred_entry)
-
-
-
-def evaluate_rel_batch_oi(outputs, targets, all_results):
-
-    for batch, target in enumerate(targets):
-        target_bboxes_scaled = rescale_bboxes(target['boxes'].cpu(), torch.flip(target['orig_size'],dims=[0]).cpu()).clone().numpy() # recovered boxes with original size
-
-        sub_bboxes_scaled = rescale_bboxes(outputs['sub_boxes'][batch].cpu(), torch.flip(target['orig_size'],dims=[0]).cpu()).clone().numpy()
-        obj_bboxes_scaled = rescale_bboxes(outputs['obj_boxes'][batch].cpu(), torch.flip(target['orig_size'],dims=[0]).cpu()).clone().numpy()
-
-        pred_sub_scores, pred_sub_classes = torch.max(outputs['sub_logits'][batch].softmax(-1)[:, :-1], dim=1)
-        pred_obj_scores, pred_obj_classes = torch.max(outputs['obj_logits'][batch].softmax(-1)[:, :-1], dim=1)
-
-        rel_scores = outputs['rel_logits'][batch][:, :-1].softmax(-1)
-
-        relation_idx = target['rel_annotations'].cpu().numpy()
-        gt_sub_boxes = target_bboxes_scaled[relation_idx[:, 0]]
-        gt_sub_labels = target['labels'][relation_idx[:, 0]].cpu().clone().numpy()
-        gt_obj_boxes = target_bboxes_scaled[relation_idx[:, 1]]
-        gt_obj_labels = target['labels'][relation_idx[:, 1]].cpu().clone().numpy()
-
-        img_result_dict = {'sbj_boxes': sub_bboxes_scaled,
-                           'sbj_labels': pred_sub_classes.cpu().clone().numpy(),
-                           'sbj_scores': pred_sub_scores.cpu().clone().numpy(),
-                           'obj_boxes': obj_bboxes_scaled,
-                           'obj_labels': pred_obj_classes.cpu().clone().numpy(),
-                           'obj_scores': pred_obj_scores.cpu().clone().numpy(),
-                           'prd_scores': rel_scores.cpu().clone().numpy(),
-                           'image': str(target['image_id'].item())+'.jpg',
-                           'gt_sbj_boxes': gt_sub_boxes,
-                           'gt_sbj_labels': gt_sub_labels,
-                           'gt_obj_boxes': gt_obj_boxes,
-                           'gt_obj_labels': gt_obj_labels,
-                           'gt_prd_labels': relation_idx[:, 2]
-                           }
-        all_results.append(img_result_dict)
