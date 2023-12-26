@@ -194,7 +194,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
 
 
 @torch.no_grad()
-def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, args, wandb_logger=None):
+def evaluate(model, criterion, postprocessors, postprocess_sub, postprocess_obj, data_loader, base_ds, base_ds_sub_val, base_ds_obj_val, device, args, wandb_logger=None):
     model.eval()
     criterion.eval()
 
@@ -223,8 +223,8 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, arg
     iou_types = tuple(k for k in ('segm', 'bbox') if k in postprocessors.keys())
     coco_evaluator = CocoEvaluator(base_ds, iou_types)
 
-    # coco_evaluator_sub = CocoEvaluator(base_ds, iou_types)
-    # coco_evaluator_obj = CocoEvaluator(base_ds, iou_types)
+    coco_evaluator_sub = CocoEvaluator(base_ds_sub_val, iou_types)
+    coco_evaluator_obj = CocoEvaluator(base_ds_obj_val, iou_types)
 
     for samples, targets in metric_logger.log_every(data_loader, 100, header):
 
@@ -250,18 +250,19 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, arg
         metric_logger.update(obj_error=loss_dict_reduced['obj_error'])
         metric_logger.update(rel_error=loss_dict_reduced['rel_error'])
 
-        if  int(os.environ['LOCAL_RANK']) == 0:
-            wandb_logger.log({
-                "eval_class_error": loss_dict_reduced['class_error'],
-                "eval_sub_error": loss_dict_reduced['sub_error'],
-                "eval_obj_error": loss_dict_reduced['obj_error'],
-                "eval_rel_error": loss_dict_reduced['rel_error'],
-            })
+        # if  int(os.environ['LOCAL_RANK']) == 0:
+        #     wandb_logger.log({
+        #         "eval_class_error": loss_dict_reduced['class_error'],
+        #         "eval_sub_error": loss_dict_reduced['sub_error'],
+        #         "eval_obj_error": loss_dict_reduced['obj_error'],
+        #         "eval_rel_error": loss_dict_reduced['rel_error'],
+        #     })
 
 
         #SGG eval
         if args.dataset == 'vg':
-            evaluate_rel_batch(outputs, targets, evaluator, evaluator_list)
+            #evaluate_rel_batch(outputs, targets, evaluator, evaluator_list)
+            evaluate_rel_batch_sig_test(outputs, targets, evaluator, evaluator_list)
         else:
             evaluate_rel_batch_oi(outputs, targets, all_results)
 
@@ -273,19 +274,19 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, arg
         if coco_evaluator is not None:
             coco_evaluator.update(res)
 
-        #results_sub = postprocess_sub(outputs, orig_target_sizes)
+        results_sub = postprocess_sub(outputs, orig_target_sizes)
+        res_sub = {target['image_id'].item(): output for target, output in zip(targets, results_sub)}
+        coco_evaluator_sub.update(res_sub)
+
+        results_obj = postprocess_obj(outputs, orig_target_sizes)
+        res_obj = {target['image_id'].item(): output for target, output in zip(targets, results_obj)}
+        coco_evaluator_obj.update(res_obj)
+
 
     if args.dataset == 'vg':
-        #evaluator['sgdet'].print_stats()
-        sgg_stats = evaluator['sgdet'].print_stats()
+        evaluator['sgdet'].print_stats()
     else:
         task_evaluation_sg.eval_rel_results(all_results, 100, do_val=True, do_vis=False)
-    
-
-    
-    if  int(os.environ['LOCAL_RANK']) == 0:
-        wandb_logger.log(sgg_stats)
-
 
     if args.eval and args.dataset == 'vg':
         calculate_mR_from_evaluator_list(evaluator_list, 'sgdet')
@@ -295,11 +296,19 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, arg
     print("Averaged stats:", metric_logger)
     if coco_evaluator is not None:
         coco_evaluator.synchronize_between_processes()
+        coco_evaluator_sub.synchronize_between_processes()
+        coco_evaluator_obj.synchronize_between_processes()
 
     # accumulate predictions from all images
     if coco_evaluator is not None:
         coco_evaluator.accumulate()
         coco_evaluator.summarize()
+
+        coco_evaluator_sub.accumulate()
+        coco_evaluator_sub.summarize()
+
+        coco_evaluator_obj.accumulate()
+        coco_evaluator_obj.summarize()
 
     stats = {k: meter.global_avg for k, meter in metric_logger.meters.items()}
     if coco_evaluator is not None:
@@ -485,7 +494,7 @@ def evaluate_rel_batch(outputs, targets, evaluator, evaluator_list):
         # pred_sub_scores, pred_sub_classes = torch.max(outputs['sub_logits'][batch].softmax(-1)[:, :-1], dim=1)
         # pred_obj_scores, pred_obj_classes = torch.max(outputs['obj_logits'][batch].softmax(-1)[:, :-1], dim=1)
 
-        pred_sub_scores, pred_sub_classes = torch.max(outputs['sub_logits'][batch].softmax(-1)[:, :], dim=1)
+        pred_sub_scores, pred_sub_classes = torch.max(outputs['sub_logits'][batch].softmax(-1)[:, :], dim=1) # 这样取不到150类（斑马）
         pred_obj_scores, pred_obj_classes = torch.max(outputs['obj_logits'][batch].softmax(-1)[:, :], dim=1)
 
         # if evaluator['sgdet'].rel_freq is not None :
@@ -501,7 +510,6 @@ def evaluate_rel_batch(outputs, targets, evaluator, evaluator_list):
         #mask = torch.logical_and((pred_sub_classes - pred_obj_classes != 0).cpu(), torch.logical_and(pred_obj_scores >= 0.002, pred_sub_scores >= 0.002).cpu())
         mask = (pred_sub_classes - pred_obj_classes != 0).cpu()
         if mask.sum() <= 198:
-            # assert(0)
             sub_bboxes_scaled = sub_bboxes_scaled[mask]
             pred_sub_classes = pred_sub_classes[mask]
             pred_sub_scores = pred_sub_scores[mask]
@@ -726,3 +734,102 @@ def evaluate_rel_batch_sig(outputs, targets, evaluator, evaluator_list):
                 if gt_entry_rel['gt_relations'].shape[0] == 0:
                     continue
                 evaluator_rel['sgdet'].evaluate_scene_graph_entry(gt_entry_rel, pred_entry)
+
+
+
+def evaluate_rel_batch_sig_test(outputs, targets, evaluator, evaluator_list):
+    num_select = 400
+    # rel_prob = outputs['rel_logits'].sigmoid()  #[bs, 400, 51]
+    # rel_prob_reshape = rel_prob.view(rel_prob.shape[0], -1)  # [bs, 20,400]
+
+    # topk_values, topk_indexes = torch.topk(rel_prob_reshape, num_select, dim=1)
+    # topk_rel = topk_indexes // rel_prob.shape[2]
+    # rel_labels = topk_indexes % rel_prob.shape[2]   
+
+
+    for batch, target in enumerate(targets):
+        target_bboxes_scaled = rescale_bboxes(target['boxes'].cpu(), torch.flip(target['orig_size'],dims=[0]).cpu()).clone().numpy()
+        gt_entry = {'gt_classes': target['labels'].cpu().clone().numpy(),
+                    'gt_relations': target['rel_annotations'].cpu().clone().numpy(),
+                    'gt_boxes': target_bboxes_scaled}    
+        
+        sub_bboxes_scaled = rescale_bboxes(outputs['sub_boxes'][batch].cpu(), torch.flip(target['orig_size'],dims=[0]).cpu()).clone().numpy()
+        obj_bboxes_scaled = rescale_bboxes(outputs['obj_boxes'][batch].cpu(), torch.flip(target['orig_size'],dims=[0]).cpu()).clone().numpy()
+
+
+        #pred_sub_scores, pred_sub_classes = torch.max(outputs['sub_logits'][batch].softmax(-1)[:, :-1], dim=1) # 这样取不到150类（斑马）
+        #pred_obj_scores, pred_obj_classes = torch.max(outputs['obj_logits'][batch].softmax(-1)[:, :-1], dim=1)
+
+        pred_sub_scores, pred_sub_classes = torch.max(outputs['sub_logits'][batch].sigmoid(), dim=1)
+        pred_obj_scores, pred_obj_classes = torch.max(outputs['obj_logits'][batch].sigmoid(), dim=1)
+
+        #rel_scores_sig, rel_classes_sig = torch.max(outputs['rel_logits'][batch].sigmoid(), dim=1)
+        rel_scores_sig = outputs['rel_logits'][batch].sigmoid()
+
+        # print(pred_sub_classes.equal(pred_sub_classes_sig)) # True
+
+        # is_50_in_tensor = 150 in pred_sub_classes_sig
+        # if is_50_in_tensor:
+        #     print(pred_sub_classes)
+        #     assert(0)
+
+
+
+        # mask = (pred_sub_classes - pred_obj_classes != 0).cpu()
+        # not_same_pair_num = mask.sum()
+        # mask_sig = (pred_sub_classes_sig - pred_obj_classes_sig != 0).cpu()
+        # not_same_pair_sig_num = mask_sig.sum()
+
+        # #todo  1.先简单的组合一下看看结果怎么
+        # tri_prob = pred_sub_scores * pred_obj_scores * rel_scores_sig
+        # sorted_values, sorted_indices = torch.sort(tri_prob, descending=True)
+
+        pred_entry = {'sub_boxes': sub_bboxes_scaled,
+                      'sub_classes': pred_sub_classes.cpu().clone().numpy(),
+                      'sub_scores': pred_sub_scores.cpu().clone().numpy(),
+                      'obj_boxes': obj_bboxes_scaled,
+                      'obj_classes': pred_obj_classes.cpu().clone().numpy(),
+                      'obj_scores': pred_obj_scores.cpu().clone().numpy(),
+                      'rel_scores': rel_scores_sig.cpu().clone().numpy()}
+
+
+        evaluator['sgdet'].evaluate_scene_graph_entry(gt_entry, pred_entry)
+
+        if evaluator_list is not None:
+            for pred_id, _, evaluator_rel in evaluator_list:
+                gt_entry_rel = gt_entry.copy()
+                mask = np.in1d(gt_entry_rel['gt_relations'][:, -1], pred_id)
+                gt_entry_rel['gt_relations'] = gt_entry_rel['gt_relations'][mask, :]
+                if gt_entry_rel['gt_relations'].shape[0] == 0:
+                    continue
+                evaluator_rel['sgdet'].evaluate_scene_graph_entry(gt_entry_rel, pred_entry)
+
+
+
+
+
+
+
+
+        #todo  2.用Rel为主score挑选
+
+    # Convert the tensor to a list of lists
+    # lists = topk_rel.tolist()
+
+    # # Function to find duplicates in a list
+    # def find_duplicates(lst):
+    #     seen = set()
+    #     duplicates = set()
+    #     for item in lst:
+    #         if item in seen:
+    #             duplicates.add(item)
+    #         seen.add(item)
+    #     return list(duplicates)
+
+    # # Find duplicates in each list
+    # duplicates_in_lists = [find_duplicates(lst) for lst in lists]
+    # duplicates_in_lists
+
+
+
+    # print(topk_rel)

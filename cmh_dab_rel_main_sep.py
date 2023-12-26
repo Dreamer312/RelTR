@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 import torch
 from torch.utils.data import DataLoader, DistributedSampler
+from pycocotools.coco import COCO
 import os, sys
 # os.environ['WANDB_MODE'] = 'disabled'
 from typing import Optional
@@ -15,7 +16,7 @@ from models.DABRelTR.util import misc as utils  #import DABRelTR.util.misc
 from datasets import build_dataset, get_coco_api_from_dataset
 # from models import build_model
 from models.DABRelTR.DABRelTR import build_DABRelTR
-from cmh_dab_rel_engine import train_one_epoch, evaluate
+from cmh_dab_rel_engine_sep import train_one_epoch, evaluate
 import wandb
 
 def get_args_parser():
@@ -171,8 +172,8 @@ def main(args):
     utils.init_distributed_mode(args)
     print("git:\n  {}\n".format(utils.get_sha()))
 
-    if int(os.environ['LOCAL_RANK']) == 0:
-        wandb.init(project="SGG", entity="dreamer0312")
+    # if int(os.environ['LOCAL_RANK']) == 0:
+    #     wandb.init(project="SGG", entity="dreamer0312")
 
     if args.frozen_weights is not None:
         assert args.masks, "Frozen training is meant for segmentation only"
@@ -238,6 +239,8 @@ def main(args):
     # data_loader_val = DataLoader(dataset_val, args.batch_size, shuffle=False, drop_last=False, collate_fn=utils.collate_fn, num_workers=args.num_workers)
 
     base_ds = get_coco_api_from_dataset(dataset_val)
+    base_ds_sub_val = COCO("/home/minghach/Data/CMH/DAB-RelTR/RelTR/data/sub_val.json")
+    base_ds_obj_val = COCO("/home/minghach/Data/CMH/DAB-RelTR/RelTR/data/obj_val.json")
 
     if args.frozen_weights is not None:
         checkpoint = torch.load(args.frozen_weights, map_location='cpu')
@@ -261,11 +264,10 @@ def main(args):
         return
 
 
-    valid = False
+    valid = True
     if valid:
         print(f"valid mode, It is the {checkpoint['epoch']} checkpoint")
-        #test_stats, coco_evaluator = evaluate(model, criterion, postprocessors, postprocess_sub, postprocess_obj, data_loader_val, base_ds, device, args)
-        test_stats, coco_evaluator = evaluate(model, criterion, postprocessors, data_loader_val, base_ds, device, args)
+        test_stats, coco_evaluator = evaluate(model, criterion, postprocessors, postprocess_sub, postprocess_obj, data_loader_val, base_ds, base_ds_sub_val, base_ds_obj_val, device, args)
         return
 
 

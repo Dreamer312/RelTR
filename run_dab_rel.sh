@@ -61,20 +61,616 @@
 
 
 
-# 将zju-3090的dabrel放过来跑
+# 将zju-3090的dabrel放过来跑      相当于300+300组合
 #====================================================================
 # export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 
+# torchrun --nproc_per_node=2 \
+#          --standalone \
+#          --nnodes=1 \
+#         cmh_dab_rel_main.py \
+#             --dataset vg \
+#             --img_folder /home/minghach/Data/CMH/RelTR/data/vg/images/ \
+#             --ann_path /home/minghach/Data/CMH/RelTR/data/vg/ \
+#             --modelname dab_detr \
+#             --batch_size=8 \
+#             --output_dir checkpoint_uts_debug_dabrel \
+#             --epochs 50 \
+#             --lr_drop 40 \
+#             --random_refpoints_xy \
+#====================================================================
+
+
+# wandb39
+#====================================================================
+# export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 
+# torchrun --nproc_per_node=2 \
+#          --standalone \
+#          --nnodes=1 \
+#          cmh_dab_rel_main.py \
+#             --dataset vg \
+#             --img_folder /home/minghach/Data/CMH/RelTR/data/vg/images/ \
+#             --ann_path /home/minghach/Data/CMH/RelTR/data/vg/ \
+#             --modelname dab_detr \
+#             --batch_size=8 \
+#             --output_dir checkpoint_uts_debug_dabrel_2 \
+#             --epochs 50 \
+#             --lr_drop 40 \
+#             --random_refpoints_xy \
+#             --num_triplets=200 \
+#             --num_entities=100 \
+#             --set_cost_class=2
+
+#wdb44
+# export CUDA_VISIBLE_DEVICES=0
+# torchrun --nproc_per_node=1 \
+#          --standalone \
+#          --nnodes=1 \
+#          cmh_dab_rel_main.py \
+#             --dataset vg \
+#             --img_folder /home/minghach/Data/CMH/RelTR/data/vg/images/ \
+#             --ann_path /home/minghach/Data/CMH/RelTR/data/vg/ \
+#             --modelname dab_detr \
+#             --batch_size=1 \
+#             --output_dir checkpoint_uts_debug_dabrel \
+#             --epochs 50 \
+#             --lr_drop 40 \
+#             --random_refpoints_xy \
+#             --num_triplets=200 \
+#             --num_entities=100 \
+#             --set_cost_class=2 \
+#             --eval \
+#             --resume ./checkpoint_uts_debug_dabrel_2/checkpoint.pth \
+
+#wdb45之前忘了设置num_select
+# export CUDA_VISIBLE_DEVICES=1
+# torchrun --nproc_per_node=1 \
+#          --standalone \
+#          --nnodes=1 \
+#          cmh_dab_rel_main.py \
+#             --dataset vg \
+#             --img_folder /home/minghach/Data/CMH/RelTR/data/vg/images/ \
+#             --ann_path /home/minghach/Data/CMH/RelTR/data/vg/ \
+#             --modelname dab_detr \
+#             --batch_size=1 \
+#             --output_dir checkpoint_uts_debug_dabrel \
+#             --epochs 50 \
+#             --lr_drop 40 \
+#             --random_refpoints_xy \
+#             --num_triplets=200 \
+#             --num_entities=100 \
+#             --num_select=100 \
+#             --set_cost_class=2 \
+#             --eval \
+#             --resume ./checkpoint_uts_debug_dabrel_2/checkpoint.pth \
+
+
+#wdb47
+# export CUDA_VISIBLE_DEVICES=0
+# torchrun --nproc_per_node=1 \
+#          --standalone \
+#          --nnodes=1 \
+#          cmh_dab_rel_main.py \
+#             --dataset vg \
+#             --img_folder /home/minghach/Data/CMH/RelTR/data/vg/images/ \
+#             --ann_path /home/minghach/Data/CMH/RelTR/data/vg/ \
+#             --modelname dab_detr \
+#             --batch_size=1 \
+#             --output_dir checkpoint_uts_debug_dabrel \
+#             --epochs 50 \
+#             --lr_drop 40 \
+#             --random_refpoints_xy \
+#             --num_triplets=200 \
+#             --num_select=100 \
+#             --num_entities=100 \
+#             --set_cost_class=2 \
+#             --eval \
+#             --resume ./checkpoint_uts_debug_dabrel_2/checkpoint0049.pth \
+            
+#====================================================================
+
+
+#wdb48      这个命令和log对不上。 不要了
+# #====================================================================
+# torchrun --nproc_per_node=2 \
+#          --standalone \
+#          --nnodes=1 \
+#          cmh_dab_rel_main.py \
+#             --dataset vg \
+#             --img_folder /home/minghach/Data/CMH/RelTR/data/vg/images/ \
+#             --ann_path /home/minghach/Data/CMH/RelTR/data/vg/ \
+#             --modelname dab_detr \
+#             --batch_size=8 \
+#             --output_dir checkpoint_uts_debug_dabrel_3 \
+#             --epochs 50 \
+#             --lr_drop 40 \
+#             --random_refpoints_xy \
+#             --num_triplets=300 \
+#             --num_entities=200 \
+#             --num_select=200 \
+#             --set_cost_class=2 \
+#             --dropout=0.
+
+
+# #====================================================================
+
+
+
+
+#wdb53
+#====================================================================
+# torchrun --nproc_per_node=2 \
+#          --standalone \
+#          --nnodes=1 \
+#          cmh_dab_rel_main.py \
+#             --dataset vg \
+#             --img_folder /home/minghach/Data/CMH/RelTR/data/vg/images/ \
+#             --ann_path /home/minghach/Data/CMH/RelTR/data/vg/ \
+#             --modelname dab_detr \
+#             --batch_size=8 \
+#             --output_dir ./checkpoint_dab_rel_5 \
+#             --epochs 50 \
+#             --lr_drop 40 \
+#             --random_refpoints_xy \
+#             --dropout=0.1 \
+#             --num_entities=200 \
+#             --num_triplets=300 \
+#             --num_select=200 \
+#             --set_cost_class=2 
+
+#wdb55
+# torchrun --nproc_per_node=2 \
+#          --standalone \
+#          --nnodes=1 \
+#          cmh_dab_rel_main.py \
+#             --dataset vg \
+#             --img_folder /home/minghach/Data/CMH/RelTR/data/vg/images/ \
+#             --ann_path /home/minghach/Data/CMH/RelTR/data/vg/ \
+#             --modelname dab_detr \
+#             --batch_size=8 \
+#             --output_dir ./checkpoint_dab_rel_5 \
+#             --epochs 50 \
+#             --lr_drop 40 \
+#             --random_refpoints_xy \
+#             --dropout=0.1 \
+#             --num_entities=200 \
+#             --num_triplets=300 \
+#             --num_select=200 \
+#             --set_cost_class=2 \
+#             --resume='./checkpoint_uts_debug_dabrel_3/checkpoint0029.pth'
+#====================================================================
+
+
+
+
+
+#wdb56    尝试200+200 不带drop      
+#====================================================================
+# torchrun --nproc_per_node=2 \
+#          --standalone \
+#          --nnodes=1 \
+#          cmh_dab_rel_main.py \
+#             --dataset vg \
+#             --img_folder /home/minghach/Data/CMH/RelTR/data/vg/images/ \
+#             --ann_path /home/minghach/Data/CMH/RelTR/data/vg/ \
+#             --modelname dab_detr \
+#             --batch_size=8 \
+#             --output_dir ./checkpoint_dab_rel_6 \
+#             --epochs 30 \
+#             --lr_drop 20 \
+#             --random_refpoints_xy \
+#             --dropout=0. \
+#             --num_entities=200 \
+#             --num_triplets=200 \
+#             --num_select=200 \
+#             --set_cost_class=2 
+
+# export CUDA_VISIBLE_DEVICES=1
+# torchrun --nproc_per_node=1 \
+#          --standalone \
+#          --nnodes=1 \
+#          cmh_dab_rel_main.py \
+#             --dataset vg \
+#             --img_folder /home/minghach/Data/CMH/RelTR/data/vg/images/ \
+#             --ann_path /home/minghach/Data/CMH/RelTR/data/vg/ \
+#             --modelname dab_detr \
+#             --batch_size=1 \
+#             --output_dir ./checkpoint_dab_rel_6 \
+#             --epochs 30 \
+#             --lr_drop 20 \
+#             --random_refpoints_xy \
+#             --dropout=0. \
+#             --num_entities=200 \
+#             --num_triplets=200 \
+#             --num_select=200 \
+#             --set_cost_class=2 \
+#             --eval \
+#             --resume='/home/minghach/Data/CMH/DAB-RelTR/RelTR/checkpoint_dab_rel_6/checkpoint0029.pth'
+#====================================================================
+
+
+
+
+#wdb57    尝试200+200 带drop      
+# #====================================================================
+# torchrun --nproc_per_node=2 \
+#          --standalone \
+#          --nnodes=1 \
+#          cmh_dab_rel_main.py \
+#             --dataset vg \
+#             --img_folder /home/minghach/Data/CMH/RelTR/data/vg/images/ \
+#             --ann_path /home/minghach/Data/CMH/RelTR/data/vg/ \
+#             --modelname dab_detr \
+#             --batch_size=8 \
+#             --output_dir ./checkpoint_dab_rel_7 \
+#             --epochs 30 \
+#             --lr_drop 20 \
+#             --random_refpoints_xy \
+#             --dropout=0.1 \
+#             --num_entities=200 \
+#             --num_triplets=200 \
+#             --num_select=200 \
+#             --set_cost_class=2 
+
+
+
+# #wdb59  
+# export CUDA_VISIBLE_DEVICES=1
+# torchrun --nproc_per_node=1 \
+#          --standalone \
+#          --nnodes=1 \
+#          cmh_dab_rel_main.py \
+#             --dataset vg \
+#             --img_folder /home/minghach/Data/CMH/RelTR/data/vg/images/ \
+#             --ann_path /home/minghach/Data/CMH/RelTR/data/vg/ \
+#             --modelname dab_detr \
+#             --batch_size=1 \
+#             --output_dir ./checkpoint_dab_rel_7 \
+#             --epochs 30 \
+#             --lr_drop 20 \
+#             --random_refpoints_xy \
+#             --dropout=0.1 \
+#             --num_entities=200 \
+#             --num_triplets=200 \
+#             --num_select=200 \
+#             --set_cost_class=2 \
+#             --eval \
+#             --resume='/home/minghach/Data/CMH/DAB-RelTR/RelTR/checkpoint_dab_rel_7/checkpoint0029.pth'
+# #====================================================================
+
+
+
+
+
+
+
+#WDB63   尝试200+400 带drop  
+#====================================================================
+# torchrun --nproc_per_node=2 \
+#          --standalone \
+#          --nnodes=1 \
+#          cmh_dab_rel_main.py \
+#             --dataset vg \
+#             --img_folder /home/minghach/Data/CMH/RelTR/data/vg/images/ \
+#             --ann_path /home/minghach/Data/CMH/RelTR/data/vg/ \
+#             --modelname dab_detr \
+#             --batch_size=8 \
+#             --output_dir ./checkpoint_dab_rel_8 \
+#             --epochs 30 \
+#             --lr_drop 20 \
+#             --random_refpoints_xy \
+#             --dropout=0.1 \
+#             --num_entities=200 \
+#             --num_triplets=400 \
+#             --num_select=200 \
+#             --set_cost_class=2 
+
+
+#WDB64 
+# export CUDA_VISIBLE_DEVICES=1
+# torchrun --nproc_per_node=1 \
+#          --standalone \
+#          --nnodes=1 \
+#          cmh_dab_rel_main.py \
+#             --dataset vg \
+#             --img_folder /home/minghach/Data/CMH/RelTR/data/vg/images/ \
+#             --ann_path /home/minghach/Data/CMH/RelTR/data/vg/ \
+#             --modelname dab_detr \
+#             --batch_size=8 \
+#             --output_dir ./checkpoint_dab_rel_8 \
+#             --epochs 30 \
+#             --lr_drop 20 \
+#             --random_refpoints_xy \
+#             --dropout=0.1 \
+#             --num_entities=200 \
+#             --num_triplets=400 \
+#             --num_select=200 \
+#             --set_cost_class=2 \
+#             --eval \
+#             --resume='/home/minghach/Data/CMH/DAB-RelTR/RelTR/checkpoint_dab_rel_8/checkpoint0029.pth'
+#====================================================================
+
+
+
+
+#WDB65   尝试200+400 带drop    25个epoch
+#====================================================================
+# torchrun --nproc_per_node=2 \
+#          --standalone \
+#          --nnodes=1 \
+#          cmh_dab_rel_main.py \
+#             --dataset vg \
+#             --img_folder /home/minghach/Data/CMH/RelTR/data/vg/images/ \
+#             --ann_path /home/minghach/Data/CMH/RelTR/data/vg/ \
+#             --modelname dab_detr \
+#             --batch_size=8 \
+#             --output_dir ./checkpoint_dab_rel_9 \
+#             --epochs 25 \
+#             --lr_drop 20 \
+#             --random_refpoints_xy \
+#             --dropout=0.1 \
+#             --num_entities=200 \
+#             --num_triplets=400 \
+#             --num_select=200 \
+#             --set_cost_class=2 
+
+# torchrun --nproc_per_node=1 \
+#          --standalone \
+#          --nnodes=1 \
+#          cmh_dab_rel_main.py \
+#             --dataset vg \
+#             --img_folder /home/minghach/Data/CMH/RelTR/data/vg/images/ \
+#             --ann_path /home/minghach/Data/CMH/RelTR/data/vg/ \
+#             --modelname dab_detr \
+#             --batch_size=8 \
+#             --output_dir ./checkpoint_dab_rel_9 \
+#             --epochs 25 \
+#             --lr_drop 20 \
+#             --random_refpoints_xy \
+#             --dropout=0.1 \
+#             --num_entities=200 \
+#             --num_triplets=400 \
+#             --num_select=200 \
+#             --set_cost_class=2 \
+#             --eval \
+#             --resume="/home/minghach/Data/CMH/DAB-RelTR/RelTR/checkpoints/checkpoint_dab_rel_9/checkpoint0024.pth"
+#====================================================================
+
+
+
+#WDB68   尝试200+300 带drop    25个epoch
+#====================================================================
+# torchrun --nproc_per_node=2 \
+#          --standalone \
+#          --nnodes=1 \
+#          cmh_dab_rel_main.py \
+#             --dataset vg \
+#             --img_folder /home/minghach/Data/CMH/RelTR/data/vg/images/ \
+#             --ann_path /home/minghach/Data/CMH/RelTR/data/vg/ \
+#             --modelname dab_detr \
+#             --batch_size=8 \
+#             --output_dir ./checkpoint_dab_rel_10 \
+#             --epochs 25 \
+#             --lr_drop 20 \
+#             --random_refpoints_xy \
+#             --dropout=0.1 \
+#             --num_entities=200 \
+#             --num_triplets=300 \
+#             --num_select=200 \
+#             --set_cost_class=2 
+
+
+# torchrun --nproc_per_node=1 \
+#          --standalone \
+#          --nnodes=1 \
+#          cmh_dab_rel_main.py \
+#             --dataset vg \
+#             --img_folder /home/minghach/Data/CMH/RelTR/data/vg/images/ \
+#             --ann_path /home/minghach/Data/CMH/RelTR/data/vg/ \
+#             --modelname dab_detr \
+#             --batch_size=8 \
+#             --output_dir ./checkpoint_dab_rel_10 \
+#             --epochs 25 \
+#             --lr_drop 20 \
+#             --random_refpoints_xy \
+#             --dropout=0.1 \
+#             --num_entities=200 \
+#             --num_triplets=300 \
+#             --num_select=200 \
+#             --set_cost_class=2 \
+#             --eval \
+#             --resume="/home/minghach/Data/CMH/DAB-RelTR/RelTR/checkpoints/checkpoint_dab_rel_10/checkpoint0024.pth"
+# #====================================================================
+
+
+
+
+
+
+#WDB69    WDB65配置加入colorjitter 尝试200+400 带drop    25个epoch
+#====================================================================
+# torchrun --nproc_per_node=2 \
+#          --standalone \
+#          --nnodes=1 \
+#          cmh_dab_rel_main.py \
+#             --dataset vg \
+#             --img_folder /home/minghach/Data/CMH/RelTR/data/vg/images/ \
+#             --ann_path /home/minghach/Data/CMH/RelTR/data/vg/ \
+#             --modelname dab_detr \
+#             --batch_size=8 \
+#             --output_dir ./checkpoint_dab_rel_11 \
+#             --epochs 25 \
+#             --lr_drop 20 \
+#             --random_refpoints_xy \
+#             --dropout=0.1 \
+#             --num_entities=200 \
+#             --num_triplets=400 \
+#             --num_select=200 \
+#             --set_cost_class=2 
+#====================================================================
+
+
+#WDB70    WDB65配置加入colorjitter 尝试200+400 带drop    25个epoch set_cost_class=1
+# #====================================================================
+# torchrun --nproc_per_node=2 \
+#          --standalone \
+#          --nnodes=1 \
+#          cmh_dab_rel_main.py \
+#             --dataset vg \
+#             --img_folder /home/minghach/Data/CMH/RelTR/data/vg/images/ \
+#             --ann_path /home/minghach/Data/CMH/RelTR/data/vg/ \
+#             --modelname dab_detr \
+#             --batch_size=8 \
+#             --output_dir ./checkpoint_dab_rel_11 \
+#             --epochs 25 \
+#             --lr_drop 20 \
+#             --random_refpoints_xy \
+#             --dropout=0.1 \
+#             --num_entities=200 \
+#             --num_triplets=400 \
+#             --num_select=200 \
+#             --set_cost_class=1
+# #====================================================================
+
+
+
+
+
+#WDB72    WDB65配置加入colorjitter 尝试200+400 带drop    25个epoch entity set_cost_class=2    triplet 1
+#C = self.cost_bbox * cost_bbox + 2 * cost_class + self.cost_giou * cost_giou
+#====================================================================
+# torchrun --nproc_per_node=2 \
+#          --standalone \
+#          --nnodes=1 \
+#          cmh_dab_rel_main.py \
+#             --dataset vg \
+#             --img_folder /home/minghach/Data/CMH/RelTR/data/vg/images/ \
+#             --ann_path /home/minghach/Data/CMH/RelTR/data/vg/ \
+#             --modelname dab_detr \
+#             --batch_size=8 \
+#             --output_dir ./checkpoint_dab_rel_13 \
+#             --epochs 25 \
+#             --lr_drop 20 \
+#             --random_refpoints_xy \
+#             --dropout=0.1 \
+#             --num_entities=200 \
+#             --num_triplets=400 \
+#             --num_select=200 \
+#             --set_cost_class=1
+#====================================================================
+
+#WDB73    WDB65配置加入colorjitter 尝试200+400 带drop    25个epoch entity set_cost_class=2    triplet 1
+#C = self.cost_bbox * cost_bbox + 2 * cost_class + self.cost_giou * cost_giou
+#self.cost_class * cost_sub_class + self.cost_class * cost_obj_class + 1 * cost_rel_class + \
+#====================================================================
+# torchrun --nproc_per_node=2 \
+#          --standalone \
+#          --nnodes=1 \
+#          cmh_dab_rel_main.py \
+#             --dataset vg \
+#             --img_folder /home/minghach/Data/CMH/RelTR/data/vg/images/ \
+#             --ann_path /home/minghach/Data/CMH/RelTR/data/vg/ \
+#             --modelname dab_detr \
+#             --batch_size=1 \
+#             --output_dir ./checkpoint_dab_rel_13 \
+#             --epochs 25 \
+#             --lr_drop 20 \
+#             --random_refpoints_xy \
+#             --dropout=0.1 \
+#             --num_entities=200 \
+#             --num_triplets=400 \
+#             --num_select=200 \
+#             --set_cost_class=1
+
+
+#WDB78
+# torchrun --nproc_per_node=1 \
+#          --standalone \
+#          --nnodes=1 \
+#          cmh_dab_rel_main.py \
+#             --dataset vg \
+#             --img_folder /home/minghach/Data/CMH/RelTR/data/vg/images/ \
+#             --ann_path /home/minghach/Data/CMH/RelTR/data/vg/ \
+#             --modelname dab_detr \
+#             --batch_size=1 \
+#             --output_dir ./checkpoint_dab_rel_13 \
+#             --epochs 25 \
+#             --lr_drop 20 \
+#             --random_refpoints_xy \
+#             --dropout=0.1 \
+#             --num_entities=200 \
+#             --num_triplets=400 \
+#             --num_select=200 \
+#             --set_cost_class=1 \
+#             --eval \
+#             --resume="/home/minghach/Data/CMH/DAB-RelTR/RelTR/checkpoint_dab_rel_13/checkpoint0024.pth"
+#====================================================================
+
+
+
+
+#WDB77    WDB65配置加入colorjitter 尝试200+400 带drop    25个epoch entity set_cost_class=2    triplet 1
+#C = self.cost_bbox * cost_bbox + 2 * cost_class + self.cost_giou * cost_giou
+#self.cost_class * cost_sub_class + self.cost_class * cost_obj_class + 1 * cost_rel_class + \
+#====================================================================
+# torchrun --nproc_per_node=2 \
+#          --standalone \
+#          --nnodes=1 \
+#          cmh_dab_rel_main.py \
+#             --dataset vg \
+#             --img_folder /home/minghach/Data/CMH/RelTR/data/vg/images/ \
+#             --ann_path /home/minghach/Data/CMH/RelTR/data/vg/ \
+#             --modelname dab_detr \
+#             --batch_size=8 \
+#             --output_dir ./checkpoint_dab_rel_wdb76 \
+#             --epochs 25 \
+#             --lr_drop 20 \
+#             --random_refpoints_xy \
+#             --dropout=0.1 \
+#             --num_entities=200 \
+#             --num_triplets=200 \
+#             --num_select=200 \
+#             --set_cost_class=1
+
+#WDB80 继续训练试试
+# torchrun --nproc_per_node=2 \
+#          --standalone \
+#          --nnodes=1 \
+#          cmh_dab_rel_main.py \
+#             --dataset vg \
+#             --img_folder /home/minghach/Data/CMH/RelTR/data/vg/images/ \
+#             --ann_path /home/minghach/Data/CMH/RelTR/data/vg/ \
+#             --modelname dab_detr \
+#             --batch_size=8 \
+#             --output_dir ./checkpoint_dab_rel_wdb76_resume \
+#             --epochs 50 \
+#             --lr_drop 20 \
+#             --random_refpoints_xy \
+#             --dropout=0.1 \
+#             --num_entities=200 \
+#             --num_triplets=200 \
+#             --num_select=200 \
+#             --set_cost_class=1 \
+#             --resume="/home/minghach/Data/CMH/DAB-RelTR/RelTR/checkpoint_dab_rel_wdb76/checkpoint0024.pth"
+#====================================================================
+
+#WDB87
+#====================================================================
 torchrun --nproc_per_node=2 \
          --standalone \
          --nnodes=1 \
-        cmh_dab_rel_main.py \
+         cmh_dab_rel_main.py \
             --dataset vg \
-            --img_folder /home/minghach/Data/CMH/RelTR/data/vg/images/ \
-            --ann_path /home/minghach/Data/CMH/RelTR/data/vg/ \
+            --img_folder /home/minghach/Data/cmh/RelTR/data/vg/images/ \
+            --ann_path /home/minghach/Data/cmh/RelTR/data/vg/ \
             --modelname dab_detr \
             --batch_size=8 \
-            --output_dir checkpoint_uts_debug_dabrel \
+            --output_dir ./checkpoint_dab_rel_wdb87 \
             --epochs 50 \
             --lr_drop 40 \
             --random_refpoints_xy \
+            --dropout=0.1 \
+            --num_entities=100 \
+            --num_triplets=200 \
+            --num_select=100 \
+            --set_cost_class=1 \
 #====================================================================

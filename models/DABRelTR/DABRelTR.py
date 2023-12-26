@@ -137,8 +137,14 @@ class DABRelTR(nn.Module):
             self.refpoint_embed.weight.data[:, :2].requires_grad = False
 
             self.refpoint_embed_triplets.weight.data[:, :2].uniform_(0,1)
-            self.refpoint_embed_triplets.weight.data[:, :2] = inverse_sigmoid(self.refpoint_embed.weight.data[:, :2])
+            #self.refpoint_embed_triplets.weight.data[:, :2] = inverse_sigmoid(self.refpoint_embed.weight.data[:, :2])
+            self.refpoint_embed_triplets.weight.data[:, :2] = inverse_sigmoid(self.refpoint_embed_triplets.weight.data[:, :2])
             self.refpoint_embed_triplets.weight.data[:, :2].requires_grad = False
+
+
+            # a = self.refpoint_embed_triplets.weight.data[:, :2].equal(self.refpoint_embed.weight.data[:, :2])
+            # print(a)
+            # assert(0)
 
         self.bbox_embed_sub = MLP(hidden_dim, hidden_dim, 4, 3)
         self.bbox_embed_obj = MLP(hidden_dim, hidden_dim, 4, 3)
@@ -661,6 +667,54 @@ class PostProcess(nn.Module):
 
         return results
 
+class PostProcessSO(nn.Module):
+    """ This module converts the model's output into the format expected by the coco api"""
+    def __init__(self, num_select=100, type='object') -> None:
+        super().__init__()
+        self.num_select = num_select
+        self.type = type  # 'subject' or 'object'
+
+    @torch.no_grad()
+    def forward(self, outputs, target_sizes):
+        if self.type == 'subject':
+            out_logits, out_bbox = outputs['sub_logits'], outputs['sub_boxes']
+        elif self.type == 'object':
+            out_logits, out_bbox = outputs['obj_logits'], outputs['obj_boxes']
+        # ... rest of the code remains the same ...
+
+        assert len(out_logits) == len(target_sizes)
+        assert target_sizes.shape[1] == 2
+
+        prob = out_logits.sigmoid()  #[bs,300,91]
+
+        #topk_values [bs,300]   topk_indexes[bs,300]
+        #prob.view(out_logits.shape[0], -1) 的作用是将 prob 的形状从 [batch_size, 300, 91] 转换成 [batch_size, 300 * 91]。
+        # 这样做的目的是将每个 query 的所有类别概率展平为一个长向量，以便在所有类别中选择最高的 num_select 个概率值。
+        topk_values, topk_indexes = torch.topk(prob.view(out_logits.shape[0], -1), self.num_select, dim=1)
+        scores = topk_values
+
+        # 例如，假设 topk_indexes 中的一个值是 181，表示在展平后的数组中第 182 个元素的概率最高。由于每个 query 有 91 个类别，
+        # 所以可以通过以下计算得到原始的 query 索引和类别索引：Query 索引：181 // 91 = 1（整数除法，结果为 1）
+        # 类别索引：181 % 91 = 90（求余数，结果为 90）
+        # 因此，这个最高概率值对应于第二个 query（索引为 1，因为索引从 0 开始）的90类别（索引为 0）。
+        # 通过这种方式，topk_boxes 就能正确表示每个最高概率值所对应的 query 索引。
+        topk_boxes = topk_indexes // out_logits.shape[2]  #[bs,300]
+
+
+        labels = topk_indexes % out_logits.shape[2]       #[bs,300]
+        boxes = box_ops.box_cxcywh_to_xyxy(out_bbox) #[bs, 300, 4]
+        boxes = torch.gather(boxes, 1, topk_boxes.unsqueeze(-1).repeat(1,1,4))
+        
+        # and from relative [0, 1] to absolute [0, height] coordinates+
+        img_h, img_w = target_sizes.unbind(1)
+        scale_fct = torch.stack([img_w, img_h, img_w, img_h], dim=1)
+        boxes = boxes * scale_fct[:, None, :]
+
+        # scores:[bs,300]   labels:[bs,300]   boxes:[bs,300,4]
+        results = [{'scores': s, 'labels': l, 'boxes': b} for s, l, b in zip(scores, labels, boxes)]
+
+        return results
+
 
 
 
@@ -715,6 +769,9 @@ def build_DABRelTR(args):
     criterion.to(device)
     postprocessors = {'bbox': PostProcess()}
 
-    return model, criterion, postprocessors
+    postprocess_sub = PostProcessSO(num_select=args.num_triplets, type='subject')
+    postprocess_obj = PostProcessSO(num_select=args.num_triplets, type='object')
+
+    return model, criterion, postprocessors, postprocess_sub, postprocess_obj
 
 

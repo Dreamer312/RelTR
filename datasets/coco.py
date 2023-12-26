@@ -145,6 +145,8 @@ def make_coco_transforms(image_set):
     if image_set == 'train':
         return T.Compose([
             T.RandomHorizontalFlip(),
+            
+            T.ColorJitter(0.4,0.4,0.4),
             T.RandomSelect(
                 T.RandomResize(scales, max_size=1333),
                 T.Compose([
@@ -187,5 +189,6 @@ def build(image_set, args):
         else:
             ann_file = ann_path + 'val.json'
 
+    #dataset = CocoDetection(img_folder, ann_file, transforms=make_coco_transforms_debug(image_set), return_masks=False)
     dataset = CocoDetection(img_folder, ann_file, transforms=make_coco_transforms_debug(image_set), return_masks=False)
     return dataset

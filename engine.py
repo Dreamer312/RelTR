@@ -15,7 +15,7 @@ from datasets.coco_eval import CocoEvaluator
 from tqdm import tqdm
 import util.misc as utils
 from util.box_ops import rescale_bboxes
-from lib.evaluation.sg_eval import BasicSceneGraphEvaluator, calculate_mR_from_evaluator_list
+from lib.evaluation.sg_eval_original import BasicSceneGraphEvaluator, calculate_mR_from_evaluator_list
 from lib.openimages_evaluation import task_evaluation_sg
 
 def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,

@@ -37,7 +37,8 @@ class HungarianMatcher(nn.Module):
         cost_class = pos_cost_class[:, tgt_ids] - neg_cost_class[:, tgt_ids]
         cost_bbox = torch.cdist(out_bbox, tgt_bbox, p=1)
         cost_giou = -generalized_box_iou(box_cxcywh_to_xyxy(out_bbox), box_cxcywh_to_xyxy(tgt_bbox))
-        C = self.cost_bbox * cost_bbox + self.cost_class * cost_class + self.cost_giou * cost_giou
+        # C = self.cost_bbox * cost_bbox + self.cost_class * cost_class + self.cost_giou * cost_giou
+        C = self.cost_bbox * cost_bbox + 2 * cost_class + self.cost_giou * cost_giou
         C = C.view(bs, num_queries, -1).cpu()  #[bs,300,47]
         sizes = [len(v["boxes"]) for v in targets]
         indices = [linear_sum_assignment(c[i]) for i, c in enumerate(C.split(sizes, -1))]
@@ -81,7 +82,7 @@ class HungarianMatcher(nn.Module):
 
         # Final triplet cost matrix
         C_rel = self.cost_bbox * cost_sub_bbox + self.cost_bbox * cost_obj_bbox  + \
-                self.cost_class * cost_sub_class + self.cost_class * cost_obj_class + 0.5 * cost_rel_class + \
+                self.cost_class * cost_sub_class + self.cost_class * cost_obj_class + 1 * cost_rel_class + \
                 self.cost_giou * cost_sub_giou + self.cost_giou * cost_obj_giou
         C_rel = C_rel.view(bs, num_queries_rel, -1).cpu() #torch.Size([bs, 200, 31])
         sizes1 = [len(v["rel_annotations"]) for v in targets]
