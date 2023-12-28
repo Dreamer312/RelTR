@@ -187,5 +187,7 @@ def build(image_set, args):
         else:
             ann_file = ann_path + 'val.json'
 
-    dataset = CocoDetection(img_folder, ann_file, transforms=make_coco_transforms_debug(image_set), return_masks=False)
+    #dataset = CocoDetection(img_folder, ann_file, transforms=make_coco_transforms_debug(image_set), return_masks=False)
+    dataset = CocoDetection(img_folder, ann_file, transforms=make_coco_transforms(image_set), return_masks=False)
+    #assert(0)
     return dataset

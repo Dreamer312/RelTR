@@ -20,14 +20,14 @@
 #     --batch_size 1 \
 #     --resume checkpoints/checkpoint/checkpoint0149.pth
 
-python main.py \
-    --dataset vg \
-    --img_folder data/vg/images/ \
-    --ann_path data/vg/ \
-    --eval \
-    --batch_size 4 \
-    --resume /home/cmh/cmh/projects/detrs/RelTR/checkpoints/checkpoint_first_2/checkpoint0149.pth \
-    --eval 
+# python main.py \
+#     --dataset vg \
+#     --img_folder data/vg/images/ \
+#     --ann_path data/vg/ \
+#     --eval \
+#     --batch_size 4 \
+#     --resume /home/cmh/cmh/projects/detrs/RelTR/checkpoints/checkpoint_first_2/checkpoint0149.pth \
+#     --eval 
 #====================================================================
 
 

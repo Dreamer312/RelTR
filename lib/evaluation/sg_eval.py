@@ -42,6 +42,49 @@ class BasicSceneGraphEvaluator:
             output['R@%i' % k] = np.mean(v)
         return output
 
+# def evaluate_from_dict(gt_entry, pred_entry, mode, result_dict, multiple_preds=False,
+#                        viz_dict=None, **kwargs):
+#     """
+#     Shortcut to doing evaluate_recall from dict
+#     :param gt_entry: Dictionary containing gt_relations, gt_boxes, gt_classes
+#     :param pred_entry: Dictionary containing pred_rels, pred_boxes (if detection), pred_classes
+#     :param mode: 'det' or 'cls'
+#     :param result_dict: 
+#     :param viz_dict: 
+#     :param kwargs: 
+#     :return: 
+#     """
+#     gt_rels = gt_entry['gt_relations']
+
+
+#     gt_boxes = gt_entry['gt_boxes'].astype(float)
+#     gt_classes = gt_entry['gt_classes']
+
+#     rel_scores = pred_entry['rel_scores']
+
+#     pred_rels = 1+rel_scores.argmax(1)
+#     predicate_scores = rel_scores.max(1)
+
+#     sub_boxes = pred_entry['sub_boxes']
+#     obj_boxes = pred_entry['obj_boxes']
+#     sub_score = pred_entry['sub_scores']
+#     obj_score = pred_entry['obj_scores']
+#     sub_class = pred_entry['sub_classes']
+#     obj_class = pred_entry['obj_classes']
+
+#     pred_to_gt, _, rel_scores = evaluate_recall(
+#                 gt_rels, gt_boxes, gt_classes,
+#                 pred_rels, sub_boxes, obj_boxes, sub_score, obj_score, predicate_scores, sub_class, obj_class, phrdet= mode=='phrdet',
+#                 **kwargs)
+
+#     for k in result_dict[mode + '_recall']:
+
+#         match = reduce(np.union1d, pred_to_gt[:k])
+
+#         rec_i = float(len(match)) / float(gt_rels.shape[0])
+#         result_dict[mode + '_recall'][k].append(rec_i)
+#     return pred_to_gt, _, rel_scores
+
 def evaluate_from_dict(gt_entry, pred_entry, mode, result_dict, multiple_preds=False,
                        viz_dict=None, **kwargs):
     """
@@ -62,7 +105,14 @@ def evaluate_from_dict(gt_entry, pred_entry, mode, result_dict, multiple_preds=F
 
     rel_scores = pred_entry['rel_scores']
 
-    pred_rels = 1+rel_scores.argmax(1)
+    # pred_rels = 1+rel_scores.argmax(1)
+    # predicate_scores = rel_scores.max(1)
+
+    # pred_rels = pred_entry['pred_rels']
+    # predicate_scores = pred_entry['predicate_scores']
+
+
+    pred_rels = rel_scores.argmax(1)
     predicate_scores = rel_scores.max(1)
 
     sub_boxes = pred_entry['sub_boxes']
@@ -71,6 +121,11 @@ def evaluate_from_dict(gt_entry, pred_entry, mode, result_dict, multiple_preds=F
     obj_score = pred_entry['obj_scores']
     sub_class = pred_entry['sub_classes']
     obj_class = pred_entry['obj_classes']
+
+    # print(sub_class.shape)
+    # print(obj_class.shape)
+    # print(pred_rels.shape)
+    # assert(0)
 
     pred_to_gt, _, rel_scores = evaluate_recall(
                 gt_rels, gt_boxes, gt_classes,
@@ -84,6 +139,7 @@ def evaluate_from_dict(gt_entry, pred_entry, mode, result_dict, multiple_preds=F
         rec_i = float(len(match)) / float(gt_rels.shape[0])
         result_dict[mode + '_recall'][k].append(rec_i)
     return pred_to_gt, _, rel_scores
+
 
 
 def evaluate_recall(gt_rels, gt_boxes, gt_classes,

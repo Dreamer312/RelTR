@@ -6,7 +6,8 @@ from .util.box_ops import box_cxcywh_to_xyxy, generalized_box_iou, box_iou
 
 
 class HungarianMatcher(nn.Module):
-    def __init__(self, cost_class: float = 1, 
+    def __init__(self, cost_class: float = 1,
+                       cost_class_dab :  float = 1,
                        cost_bbox: float = 1, 
                        cost_giou: float = 1, 
                        iou_threshold: float = 0.7, 
@@ -15,6 +16,7 @@ class HungarianMatcher(nn.Module):
         self.cost_class = cost_class
         self.cost_bbox = cost_bbox
         self.cost_giou = cost_giou
+        self.cost_class_dab = cost_class_dab
         self.iou_threshold = iou_threshold
         assert cost_class != 0 or cost_bbox != 0 or cost_giou != 0, "all costs cant be 0"
         self.focal_alpha = focal_alpha
@@ -37,7 +39,7 @@ class HungarianMatcher(nn.Module):
         cost_class = pos_cost_class[:, tgt_ids] - neg_cost_class[:, tgt_ids]
         cost_bbox = torch.cdist(out_bbox, tgt_bbox, p=1)
         cost_giou = -generalized_box_iou(box_cxcywh_to_xyxy(out_bbox), box_cxcywh_to_xyxy(tgt_bbox))
-        C = self.cost_bbox * cost_bbox + self.cost_class * cost_class + self.cost_giou * cost_giou
+        C = self.cost_bbox * cost_bbox + self.cost_class_dab * cost_class + self.cost_giou * cost_giou
         C = C.view(bs, num_queries, -1).cpu()  #[bs,300,47]
         sizes = [len(v["boxes"]) for v in targets]
         indices = [linear_sum_assignment(c[i]) for i, c in enumerate(C.split(sizes, -1))]
@@ -109,7 +111,8 @@ class HungarianMatcher(nn.Module):
                sub_weight, obj_weight
     
 def build_matcher(args):
-    return HungarianMatcher(cost_class=args.set_cost_class, 
+    return HungarianMatcher(cost_class=args.set_cost_class,
+                            cost_class_dab = args.set_cost_class_dab,
                             cost_bbox=args.set_cost_bbox, 
                             cost_giou=args.set_cost_giou, 
                             iou_threshold=args.set_iou_threshold,

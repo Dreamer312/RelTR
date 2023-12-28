@@ -15,8 +15,8 @@ from datasets import build_dataset, get_coco_api_from_dataset
 from models.DABRelTR.DABRelTR import build_DABRelTR
 from cmh_dab_rel_engine import train_one_epoch, evaluate
 import wandb
-# os.environ['WANDB_MODE'] = 'offline'
-os.environ['WANDB_MODE'] = 'disabled'
+os.environ['WANDB_MODE'] = 'offline'
+# os.environ['WANDB_MODE'] = 'disabled'
 
 def get_args_parser():
     parser = argparse.ArgumentParser('DAB-RelTR', add_help=False)
@@ -106,6 +106,8 @@ def get_args_parser():
                         help="giou box coefficient in the matching cost")
     parser.add_argument('--set_iou_threshold', default=0.7, type=float,  # ! Dab没有这个
                         help="giou box coefficient in the matching cost")
+    parser.add_argument('--set_cost_class_dab', default=2, type=float, 
+                        help="Class coefficient in the matching cost")
 
     # * Loss coefficients
     parser.add_argument('--bbox_loss_coef', default=5, type=float, 
@@ -170,8 +172,8 @@ def main(args):
     utils.init_distributed_mode(args)
     print("git:\n  {}\n".format(utils.get_sha()))
 
-    # if int(os.environ['LOCAL_RANK']) == 0:
-    if  utils.is_main_process():
+    if int(os.environ['LOCAL_RANK']) == 0:
+    #if  utils.is_main_process():
         wandb.init(project="SGG", entity="dreamer0312")
 
     if args.frozen_weights is not None:
@@ -250,12 +252,12 @@ def main(args):
         # del checkpoint['optimizer']
         if not args.eval and 'optimizer' in checkpoint and 'lr_scheduler' in checkpoint and 'epoch' in checkpoint:
             optimizer.load_state_dict(checkpoint['optimizer'])
-            lr_scheduler.load_state_dict(checkpoint['lr_scheduler'])
+            #lr_scheduler.load_state_dict(checkpoint['lr_scheduler'])
             args.start_epoch = checkpoint['epoch'] + 1
 
     if args.eval:
         print('It is the {}th checkpoint'.format(checkpoint['epoch']))
-        test_stats, coco_evaluator = evaluate(model, criterion, postprocessors, data_loader_val, base_ds, device, args)
+        test_stats, coco_evaluator = evaluate(model, criterion, postprocessors, data_loader_val, base_ds, device, args, wandb_logger = wandb)
         if args.output_dir:
             utils.save_on_master(coco_evaluator.coco_eval["bbox"].eval, output_dir / "eval.pth")
         return
@@ -280,9 +282,7 @@ def main(args):
                 checkpoint_paths.append(output_dir / f'checkpoint{epoch:04}.pth')
 
 
-
-
-                
+      
             for checkpoint_path in checkpoint_paths:
                 utils.save_on_master({
                     'model': model_without_ddp.state_dict(),
@@ -293,7 +293,7 @@ def main(args):
                 }, checkpoint_path)
 
 
-        test_stats, coco_evaluator = evaluate(model, criterion, postprocessors, data_loader_val, base_ds, device, args)
+        test_stats, coco_evaluator = evaluate(model, criterion, postprocessors, data_loader_val, base_ds, device, args, wandb_logger = wandb)
         
         log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
                      **{f'test_{k}': v for k, v in test_stats.items()},

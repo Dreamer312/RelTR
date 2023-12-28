@@ -21,7 +21,7 @@ import os
 
 #暂时是rel的uitl还没有用到
 from models.DABRelTR.util.box_ops import rescale_bboxes
-from RelTR.lib.evaluation.cmh_sg_eval import BasicSceneGraphEvaluator, calculate_mR_from_evaluator_list
+from lib.evaluation.sg_eval import BasicSceneGraphEvaluator, calculate_mR_from_evaluator_list
 from lib.openimages_evaluation import task_evaluation_sg
 
 def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
@@ -191,7 +191,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
 
 
 @torch.no_grad()
-def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, args):
+def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, args, wandb_logger = None):
     model.eval()
     criterion.eval()
 
@@ -250,7 +250,7 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, arg
 
         # SGG eval
         if args.dataset == 'vg':
-            evaluate_rel_batch_sig_test(outputs, targets, evaluator, evaluator_list)
+            evaluate_rel_batch(outputs, targets, evaluator, evaluator_list)
         # else:
         #     evaluate_rel_batch_oi(outputs, targets, all_results)
 
@@ -267,9 +267,13 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, arg
 
 
     if args.dataset == 'vg':
-        evaluator['sgdet'].print_stats()
+        #evaluator['sgdet'].print_stats()
+        sgg_stats = evaluator['sgdet'].print_stats()
     else:
         task_evaluation_sg.eval_rel_results(all_results, 100, do_val=True, do_vis=False)
+
+    if  int(os.environ['LOCAL_RANK']) == 0:
+        wandb_logger.log(sgg_stats)
 
     if args.eval and args.dataset == 'vg':
         calculate_mR_from_evaluator_list(evaluator_list, 'sgdet')

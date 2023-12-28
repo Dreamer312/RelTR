@@ -97,29 +97,30 @@ def evaluate_from_dict(gt_entry, pred_entry, mode, result_dict, multiple_preds=F
     :param kwargs: 
     :return: 
     """
-    gt_rels = gt_entry['gt_relations']  #[一张图片三元组数量, 3]
+    gt_rels = gt_entry['gt_relations']
 
 
-    gt_boxes = gt_entry['gt_boxes'].astype(float) #[10, 4]
-    gt_classes = gt_entry['gt_classes'] #[10]
+    gt_boxes = gt_entry['gt_boxes'].astype(float)
+    gt_classes = gt_entry['gt_classes']
 
-    #rel_scores = pred_entry['rel_scores']  #[300,51]
+    rel_scores = pred_entry['rel_scores']
 
     # pred_rels = 1+rel_scores.argmax(1)
     # predicate_scores = rel_scores.max(1)
 
-    pred_rels = pred_entry['pred_rels']
-    predicate_scores = pred_entry['predicate_scores']
+    # pred_rels = pred_entry['pred_rels']
+    # predicate_scores = pred_entry['predicate_scores']
 
-    # pred_rels = rel_scores.argmax(1)  #[300]
-    # predicate_scores = rel_scores.max(1) #[300]
 
-    sub_boxes = pred_entry['sub_boxes']  #[300, 4]
-    obj_boxes = pred_entry['obj_boxes']  #[300, 4]
-    sub_score = pred_entry['sub_scores'] #[300]
-    obj_score = pred_entry['obj_scores'] #[300]
-    sub_class = pred_entry['sub_classes'] #[300]
-    obj_class = pred_entry['obj_classes'] #[300]
+    pred_rels = rel_scores.argmax(1)
+    predicate_scores = rel_scores.max(1)
+
+    sub_boxes = pred_entry['sub_boxes']
+    obj_boxes = pred_entry['obj_boxes']
+    sub_score = pred_entry['sub_scores']
+    obj_score = pred_entry['obj_scores']
+    sub_class = pred_entry['sub_classes']
+    obj_class = pred_entry['obj_classes']
 
     # print(sub_class.shape)
     # print(obj_class.shape)
