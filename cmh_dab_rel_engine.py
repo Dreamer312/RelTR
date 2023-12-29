@@ -37,7 +37,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
     metric_logger.add_meter('rel_error', utils.SmoothedValue(window_size=1, fmt='{value:.2f}'))
 
     header = 'Epoch: [{}]'.format(epoch)
-    print_freq = 500
+    print_freq = 1000
 
     # is_main_process = not is_initialized() or get_rank() == 0
 
@@ -485,6 +485,7 @@ def evaluate_rel_batch(outputs, targets, evaluator, evaluator_list):
         # pred_sub_scores, pred_sub_classes = torch.max(outputs['sub_logits'][batch].softmax(-1)[:, :-1], dim=1)
         # pred_obj_scores, pred_obj_classes = torch.max(outputs['obj_logits'][batch].softmax(-1)[:, :-1], dim=1)
 
+
         pred_sub_scores, pred_sub_classes = torch.max(outputs['sub_logits'][batch].softmax(-1)[:, :], dim=1)
         pred_obj_scores, pred_obj_classes = torch.max(outputs['obj_logits'][batch].softmax(-1)[:, :], dim=1)
 
@@ -500,7 +501,7 @@ def evaluate_rel_batch(outputs, targets, evaluator, evaluator_list):
         ###################################################################A-relation-A
         #mask = torch.logical_and((pred_sub_classes - pred_obj_classes != 0).cpu(), torch.logical_and(pred_obj_scores >= 0.002, pred_sub_scores >= 0.002).cpu())
         mask = (pred_sub_classes - pred_obj_classes != 0).cpu()
-        if mask.sum() <= 198:
+        if mask.sum() <= (rel_scores.size(0)-2):
             # assert(0)
             sub_bboxes_scaled = sub_bboxes_scaled[mask]
             pred_sub_classes = pred_sub_classes[mask]

@@ -441,6 +441,7 @@ class TransformerDecoder(nn.Module):
                 intermediate.append(self.norm(output))
                 intermediate_output_sub.append(self.norm_sub(output_sub))
                 intermediate_output_obj.append(self.norm_obj(output_obj))
+
                 intermediate_submaps.append(sub_maps)
                 intermediate_objmaps.append(obj_maps)
 
@@ -483,6 +484,7 @@ class TransformerDecoder(nn.Module):
                   "hs_obj":torch.stack(intermediate_output_obj).transpose(1, 2),
                   "reference_obj":torch.stack(ref_points_obj).transpose(1, 2),
                 }
+
 
         return result, torch.stack(intermediate_submaps), torch.stack(intermediate_objmaps)
 

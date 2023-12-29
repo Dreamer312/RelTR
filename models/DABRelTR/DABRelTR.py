@@ -15,7 +15,7 @@ from .util import box_ops
 from collections import Counter
 
 
-def sigmoid_focal_loss(inputs, targets, num_boxes, alpha: float = 0.25, gamma: float = 2):
+def sigmoid_focal_loss(inputs, targets, num_boxes, alpha: float = 0.25, gamma: float = 2, weights=None):
     """
     Loss used in RetinaNet for dense detection: https://arxiv.org/abs/1708.02002.
     Args:
@@ -32,13 +32,19 @@ def sigmoid_focal_loss(inputs, targets, num_boxes, alpha: float = 0.25, gamma: f
         Loss tensor
     """
     prob = inputs.sigmoid()  #torch.Size([bs, 300, 91])
-    ce_loss = F.binary_cross_entropy_with_logits(inputs, targets, reduction="none")
+    ce_loss = F.binary_cross_entropy_with_logits(inputs, targets, reduction="none")        
     p_t = prob * targets + (1 - prob) * (1 - targets)
     loss = ce_loss * ((1 - p_t) ** gamma)
 
     if alpha >= 0:
         alpha_t = alpha * targets + (1 - alpha) * (1 - targets)
         loss = alpha_t * loss
+    # loss torch.Size([bs, 800, 151])
+    # weights torch.Size([bs, 800])
+    
+
+    if weights is not None:
+        loss = loss * weights.unsqueeze(-1)
 
 
     return loss.mean(1).sum() / num_boxes
@@ -338,12 +344,13 @@ class DABRelTR(nn.Module):
 
 
 class SetCriterion(nn.Module):
-    def __init__(self, num_classes, num_rel_classes, matcher, weight_dict, eos_coef, focal_alpha, losses):
+    def __init__(self, num_classes, num_rel_classes, matcher, weight_dict, eos_coef, focal_alpha, losses, loss_weight):
         super().__init__()
         self.num_classes = num_classes #151
         self.matcher = matcher
         self.weight_dict = weight_dict      
         self.losses = losses
+        self.loss_weight = loss_weight
 
         #? DAB
         self.focal_alpha = focal_alpha
@@ -396,8 +403,14 @@ class SetCriterion(nn.Module):
             target_classes_onehot.scatter_(2, target_classes.unsqueeze(-1), 1)
             target_classes_onehot = target_classes_onehot[:, :, :-1]  # Remove the 'no object' class
 
+
             # Compute the focal loss
-            loss_ce = sigmoid_focal_loss(src_logits, target_classes_onehot, num_boxes, alpha=self.focal_alpha, gamma=2) * src_logits.shape[1]
+            #
+
+            all_loss_weight = None
+            if self.loss_weight:
+                all_loss_weight = torch.cat((torch.ones(pred_logits.shape[:2]).to(pred_logits.device), indices[2]*0.5, indices[3]*0.5), dim=-1)
+            loss_ce = sigmoid_focal_loss(src_logits, target_classes_onehot, num_boxes, alpha=self.focal_alpha, gamma=2, weights=all_loss_weight) * src_logits.shape[1]
 
             #TODO Weight the loss if necessary
             #! 先不加原版rel的weight了
@@ -764,7 +777,8 @@ def build_DABRelTR(args):
                              weight_dict=weight_dict,
                              eos_coef=args.eos_coef,
                              focal_alpha=args.focal_alpha, 
-                             losses=losses)
+                             losses=losses,
+                             loss_weight=args.loss_weight)
     
     criterion.to(device)
     postprocessors = {'bbox': PostProcess()}

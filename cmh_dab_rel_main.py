@@ -100,6 +100,8 @@ def get_args_parser():
     # * Matcher
     parser.add_argument('--set_cost_class', default=1, type=float, 
                         help="Class coefficient in the matching cost")  #! RelTR: 1, DAB-DETR: 2
+    parser.add_argument('--set_cost_class_dab', default=2, type=float, 
+                        help="Class coefficient in the matching cost")
     parser.add_argument('--set_cost_bbox', default=5, type=float,
                         help="L1 box coefficient in the matching cost")
     parser.add_argument('--set_cost_giou', default=2, type=float,
@@ -108,6 +110,8 @@ def get_args_parser():
                         help="giou box coefficient in the matching cost")
 
     # * Loss coefficients
+    parser.add_argument('--loss_weight', action='store_true')
+
     parser.add_argument('--bbox_loss_coef', default=5, type=float, 
                         help="loss coefficient for bbox L1 loss")
     parser.add_argument('--giou_loss_coef', default=2, type=float, 
@@ -136,11 +140,12 @@ def get_args_parser():
     parser.add_argument('--start_epoch', default=0, type=int, metavar='N',
                         help='start epoch')
     parser.add_argument('--eval', action='store_true')
-    parser.add_argument('--num_workers', default=8, type=int)
+    parser.add_argument('--num_workers', default=12, type=int)
 
     # distributed training parameters
     parser.add_argument('--world_size', default=1, type=int,
                         help='number of distributed processes')
+    
     parser.add_argument('--dist_url', default='env://', help='url used to set up distributed training')
 
     parser.add_argument('--return_interm_layers', action='store_true',

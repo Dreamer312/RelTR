@@ -655,6 +655,63 @@
 
 #WDB87
 #====================================================================
+# torchrun --nproc_per_node=2 \
+#          --standalone \
+#          --nnodes=1 \
+#          cmh_dab_rel_main.py \
+#             --dataset vg \
+#             --img_folder /home/minghach/Data/cmh/RelTR/data/vg/images/ \
+#             --ann_path /home/minghach/Data/cmh/RelTR/data/vg/ \
+#             --modelname dab_detr \
+#             --batch_size=8 \
+#             --output_dir ./checkpoint_dab_rel_wdb87 \
+#             --epochs 50 \
+#             --lr_drop 40 \
+#             --random_refpoints_xy \
+#             --dropout=0.1 \
+#             --num_entities=100 \
+#             --num_triplets=200 \
+#             --num_select=100 \
+#             --set_cost_class=1 \
+#====================================================================
+
+
+
+
+
+
+
+
+
+
+#wdb93 dab-reltr-0.1 修复bug，增加作者matcher的weight
+#====================================================================
+# torchrun --nproc_per_node=2 \
+#          --standalone \
+#          --nnodes=1 \
+#          cmh_dab_rel_main.py \
+#             --dataset vg \
+#             --img_folder /home/minghach/Data/cmh/RelTR/data/vg/images/ \
+#             --ann_path /home/minghach/Data/cmh/RelTR/data/vg/ \
+#             --modelname dab_detr \
+#             --batch_size=8 \
+#             --output_dir ./checkpoint_dab_rel_wdb93 \
+#             --epochs 30 \
+#             --lr_drop 20 \
+#             --random_refpoints_xy \
+#             --dropout=0.1 \
+#             --num_entities=200 \
+#             --num_triplets=300 \
+#             --num_select=200 \
+#             --set_cost_class=1 \
+#             --set_cost_class_dab=2 \
+#             --loss_weight \
+#====================================================================
+
+
+
+#wdb94 dab-reltr-0.1 修复bug，不用作者的weight，增加T.ColorJitter(.4, .4, .4),
+#====================================================================
 torchrun --nproc_per_node=2 \
          --standalone \
          --nnodes=1 \
@@ -664,13 +721,14 @@ torchrun --nproc_per_node=2 \
             --ann_path /home/minghach/Data/cmh/RelTR/data/vg/ \
             --modelname dab_detr \
             --batch_size=8 \
-            --output_dir ./checkpoint_dab_rel_wdb87 \
+            --output_dir ./checkpoint_dab_rel_wdb94 \
             --epochs 50 \
             --lr_drop 40 \
             --random_refpoints_xy \
             --dropout=0.1 \
-            --num_entities=100 \
-            --num_triplets=200 \
-            --num_select=100 \
+            --num_entities=200 \
+            --num_triplets=300 \
+            --num_select=200 \
             --set_cost_class=1 \
+            --set_cost_class_dab=2 \
 #====================================================================
