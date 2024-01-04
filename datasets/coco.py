@@ -132,7 +132,9 @@ class ConvertCocoPolysToMask(object):
 
         return image, target
 
-
+#T.RandomSelect 在这两个选项之间随机选择一个。这意味着对于每个图像，要么执行第一个 RandomResize，
+#要么执行 Compose 中的一系列变换。这种随机性增加了模型训练过程中的数据多样性，
+#有助于提高模型对不同尺寸和形状的图像的鲁棒性。通过这种方式，模型可以学会更好地泛化到新的、未见过的图像上。
 def make_coco_transforms(image_set):
 
     normalize = T.Compose([
@@ -145,8 +147,7 @@ def make_coco_transforms(image_set):
     if image_set == 'train':
         return T.Compose([
             T.RandomHorizontalFlip(),
-            
-            T.ColorJitter(0.4,0.4,0.4),
+            #T.ColorJitter(.4, .4, .4),
             T.RandomSelect(
                 T.RandomResize(scales, max_size=1333),
                 T.Compose([
@@ -190,5 +191,7 @@ def build(image_set, args):
             ann_file = ann_path + 'val.json'
 
     #dataset = CocoDetection(img_folder, ann_file, transforms=make_coco_transforms_debug(image_set), return_masks=False)
-    dataset = CocoDetection(img_folder, ann_file, transforms=make_coco_transforms_debug(image_set), return_masks=False)
+    data_transform = make_coco_transforms(image_set)
+    print(f"data_transform:{data_transform}")
+    dataset = CocoDetection(img_folder, ann_file, transforms=data_transform, return_masks=False)
     return dataset

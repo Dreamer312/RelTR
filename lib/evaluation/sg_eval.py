@@ -103,17 +103,18 @@ def evaluate_from_dict(gt_entry, pred_entry, mode, result_dict, multiple_preds=F
     gt_boxes = gt_entry['gt_boxes'].astype(float)
     gt_classes = gt_entry['gt_classes']
 
-    rel_scores = pred_entry['rel_scores']
+    # rel_scores = pred_entry['rel_scores']
 
     # pred_rels = 1+rel_scores.argmax(1)
     # predicate_scores = rel_scores.max(1)
 
-    # pred_rels = pred_entry['pred_rels']
-    # predicate_scores = pred_entry['predicate_scores']
-
-
-    pred_rels = rel_scores.argmax(1)
-    predicate_scores = rel_scores.max(1)
+    if 'predicate_scores' in pred_entry.keys():
+        pred_rels = pred_entry['pred_rels']
+        predicate_scores = pred_entry['predicate_scores']
+    else:
+        rel_scores = pred_entry['rel_scores']
+        pred_rels = rel_scores.argmax(1)
+        predicate_scores = rel_scores.max(1)
 
     sub_boxes = pred_entry['sub_boxes']
     obj_boxes = pred_entry['obj_boxes']

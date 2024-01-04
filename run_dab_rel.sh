@@ -712,6 +712,128 @@
 
 #wdb94 dab-reltr-0.1 修复bug，不用作者的weight，增加T.ColorJitter(.4, .4, .4),
 #====================================================================
+# torchrun --nproc_per_node=2 \
+#          --standalone \
+#          --nnodes=1 \
+#          cmh_dab_rel_main.py \
+#             --dataset vg \
+#             --img_folder /home/minghach/Data/cmh/RelTR/data/vg/images/ \
+#             --ann_path /home/minghach/Data/cmh/RelTR/data/vg/ \
+#             --modelname dab_detr \
+#             --batch_size=8 \
+#             --output_dir ./checkpoint_dab_rel_wdb94 \
+#             --epochs 50 \
+#             --lr_drop 40 \
+#             --random_refpoints_xy \
+#             --dropout=0.1 \
+#             --num_entities=200 \
+#             --num_triplets=300 \
+#             --num_select=200 \
+#             --set_cost_class=1 \
+#             --set_cost_class_dab=2 \
+
+#wdb95 去除重复eval
+# torchrun --nproc_per_node=2 \
+#          --standalone \
+#          --nnodes=1 \
+#          cmh_dab_rel_main.py \
+#             --dataset vg \
+#             --img_folder /home/minghach/Data/cmh/RelTR/data/vg/images/ \
+#             --ann_path /home/minghach/Data/cmh/RelTR/data/vg/ \
+#             --modelname dab_detr \
+#             --batch_size=8 \
+#             --output_dir ./checkpoint_dab_rel_wdb94 \
+#             --epochs 50 \
+#             --lr_drop 40 \
+#             --random_refpoints_xy \
+#             --dropout=0.1 \
+#             --num_entities=200 \
+#             --num_triplets=300 \
+#             --num_select=200 \
+#             --set_cost_class=1 \
+#             --set_cost_class_dab=2 \
+#             --resume="/home/minghach/Data/cmh/DAB-RelTR/RelTR/checkpoint_dab_rel_wdb94/checkpoint0049.pth" \
+#             --eval
+
+#wdb97 用了evaluate_rel_batch_sig_test
+# torchrun --nproc_per_node=2 \
+#          --standalone \
+#          --nnodes=1 \
+#          cmh_dab_rel_main.py \
+#             --dataset vg \
+#             --img_folder /home/minghach/Data/cmh/RelTR/data/vg/images/ \
+#             --ann_path /home/minghach/Data/cmh/RelTR/data/vg/ \
+#             --modelname dab_detr \
+#             --batch_size=8 \
+#             --output_dir ./checkpoint_dab_rel_wdb94 \
+#             --epochs 50 \
+#             --lr_drop 40 \
+#             --random_refpoints_xy \
+#             --dropout=0.1 \
+#             --num_entities=200 \
+#             --num_triplets=300 \
+#             --num_select=200 \
+#             --set_cost_class=1 \
+#             --set_cost_class_dab=2 \
+#             --resume="/home/minghach/Data/cmh/DAB-RelTR/RelTR/checkpoint_dab_rel_wdb94/checkpoint0049.pth" \
+#             --eval
+#====================================================================
+
+
+# #WDB100 dab-reltr-0.1 修复bug，不用作者的weight，增加T.ColorJitter(.4, .4, .4),
+# #====================================================================
+# torchrun --nproc_per_node=2 \
+#          --standalone \
+#          --nnodes=1 \
+#          cmh_dab_rel_main.py \
+#             --dataset vg \
+#             --img_folder /home/minghach/Data/cmh/RelTR/data/vg/images/ \
+#             --ann_path /home/minghach/Data/cmh/RelTR/data/vg/ \
+#             --modelname dab_detr \
+#             --batch_size=8 \
+#             --output_dir ./checkpoint_dab_rel_wdb100 \
+#             --epochs 70 \
+#             --lr_drop 40 \
+#             --random_refpoints_xy \
+#             --dropout=0.1 \
+#             --num_entities=200 \
+#             --num_triplets=300 \
+#             --num_select=200 \
+#             --set_cost_class=1 \
+#             --set_cost_class_dab=2 \
+#             --resume="/home/minghach/Data/cmh/DAB-RelTR/RelTR/checkpoint_dab_rel_wdb94/checkpoint0049.pth" \
+# #====================================================================
+
+
+#WDB101 dab-reltr-0.1 修复bug，不用作者的weight，增加T.ColorJitter(.4, .4, .4),
+# #====================================================================
+# torchrun --nproc_per_node=2 \
+#          --standalone \
+#          --nnodes=1 \
+#          cmh_dab_rel_main.py \
+#             --dataset vg \
+#             --img_folder /home/minghach/Data/cmh/RelTR/data/vg/images/ \
+#             --ann_path /home/minghach/Data/cmh/RelTR/data/vg/ \
+#             --modelname dab_detr \
+#             --batch_size=8 \
+#             --output_dir ./checkpoint_dab_rel_wdb101 \
+#             --epochs 60 \
+#             --lr_drop 50 \
+#             --random_refpoints_xy \
+#             --dropout=0.1 \
+#             --num_entities=200 \
+#             --num_triplets=200 \
+#             --num_select=200 \
+#             --set_cost_class=1 \
+#             --set_cost_class_dab=2 \
+# #====================================================================
+
+
+
+
+
+#wdb102 dab-reltr-0.1 修复bug，不用作者的weight，去除T.ColorJitter(.4, .4, .4),与WDB94对照colorjitter
+#====================================================================
 torchrun --nproc_per_node=2 \
          --standalone \
          --nnodes=1 \
@@ -721,7 +843,7 @@ torchrun --nproc_per_node=2 \
             --ann_path /home/minghach/Data/cmh/RelTR/data/vg/ \
             --modelname dab_detr \
             --batch_size=8 \
-            --output_dir ./checkpoint_dab_rel_wdb94 \
+            --output_dir ./checkpoint_dab_rel_wdb102 \
             --epochs 50 \
             --lr_drop 40 \
             --random_refpoints_xy \
