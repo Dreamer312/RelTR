@@ -72,18 +72,18 @@ class MLP(nn.Module):
 
 class DABRelTR(nn.Module):
     """ This is the DAB-DETR module that performs object detection """
-    def __init__(self, backbone, 
-                    transformer, 
-                    num_classes,
-                    num_rel_classes,
-                    num_queries,
-                    num_triplets, 
-                    num_dec_layers,
-                    aux_loss=False, 
-                    iter_update=True,
-                    query_dim=4, 
-                    bbox_embed_diff_each_layer=False,
-                    random_refpoints_xy=False,
+    def __init__(self,  backbone, 
+                        transformer, 
+                        num_classes,
+                        num_rel_classes,
+                        num_queries,
+                        num_triplets, 
+                        num_dec_layers,
+                        aux_loss=False, 
+                        iter_update=True,
+                        query_dim=4, 
+                        bbox_embed_diff_each_layer=False,
+                        random_refpoints_xy=False,
                     ):
         """ Initializes the model.
         Parameters:
@@ -110,6 +110,14 @@ class DABRelTR(nn.Module):
         self.backbone = backbone
         self.aux_loss = aux_loss
         #=============================================================================
+
+
+        #?=============================DN================================================
+        # leave one dim for indicator
+        self.label_enc = nn.Embedding(num_classes + 1, hidden_dim - 1)  #[152, 255]
+        self.num_classes = num_classes
+        #?=============================DN================================================
+
 
         #=============================DAB================================================
 
@@ -223,7 +231,8 @@ class DABRelTR(nn.Module):
         
         #=============================================================================
 
-    def forward(self, samples: NestedTensor):
+    #def forward(self, samples: NestedTensor):
+    def forward(self, samples: NestedTensor, dn_args=None):
         if isinstance(samples, (list, torch.Tensor)):
             samples = nested_tensor_from_tensor_list(samples)
         features, pos = self.backbone(samples)  
@@ -232,6 +241,7 @@ class DABRelTR(nn.Module):
         assert mask is not None
         #=============================DAB================================================
         # default pipeline
+        
         embedweight = self.refpoint_embed.weight #[300,4]
 
         #result:{hs:[6,bs,300,256]
@@ -734,7 +744,7 @@ class PostProcessSO(nn.Module):
 
 
 
-def build_DABRelTR(args):
+def build_DNDABRelTR(args):
 
     num_classes = 151 if args.dataset != 'oi' else 289 # some entity categories in OIV6 are deactivated.
     num_rel_classes = 51 if args.dataset != 'oi' else 31
