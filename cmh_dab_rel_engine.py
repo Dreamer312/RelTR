@@ -250,7 +250,7 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, arg
 
         # SGG eval
         if args.dataset == 'vg':
-            evaluate_rel_batch(outputs, targets, evaluator, evaluator_list)
+            evaluate_rel_batch_sig_test(outputs, targets, evaluator, evaluator_list)
         # else:
         #     evaluate_rel_batch_oi(outputs, targets, all_results)
 
@@ -720,7 +720,7 @@ def evaluate_rel_batch_sig(outputs, targets, evaluator, evaluator_list):
 
 
 def evaluate_rel_batch_sig_test(outputs, targets, evaluator, evaluator_list):
-    num_select = 400
+    num_select = 150
     rel_prob = outputs['rel_logits'].sigmoid()  #[bs, 400, 51]
     rel_prob_reshape = rel_prob.view(rel_prob.shape[0], -1)  # [bs, 20,400]
 

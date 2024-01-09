@@ -477,8 +477,58 @@
 
 
 #为了不加载存储的lr schedule，注释了主函数255行，记得改回
-export CUDA_VISIBLE_DEVICES=4,5,6,7
-torchrun --nproc_per_node=4 \
+# export CUDA_VISIBLE_DEVICES=4,5,6,7
+# torchrun --nproc_per_node=4 \
+#          --standalone \
+#          --nnodes=1 \
+#          cmh_dab_rel_main.py \
+#             --dataset vg \
+#             --img_folder /home/cmh/cmh/projects/detrs/RelTR/data/vg/images/ \
+#             --ann_path /home/cmh/cmh/projects/detrs/RelTR/data/vg/ \
+#             --modelname dab_detr \
+#             --batch_size=4 \
+#             --output_dir /data1/cmh_data/checkpoint_dab_rel_2 \
+#             --epochs 50 \
+#             --lr_drop 40 \
+#             --random_refpoints_xy \
+#             --dropout=0.1 \
+#             --num_entities=200 \
+#             --num_triplets=300 \
+#             --num_select=200 \
+#             --set_cost_class=1 \
+#             --set_cost_class_dab=2 \
+#             --resume="/data1/cmh_data/checkpoint_dab_rel_1/checkpoint0014.pth"
+#====================================================================
+
+
+
+#====================================================================
+# export CUDA_VISIBLE_DEVICES=4,5,6,7
+# torchrun --nproc_per_node=4 \
+#          --standalone \
+#          --nnodes=1 \
+#          cmh_dab_rel_main.py \
+#             --dataset vg \
+#             --img_folder /home/cmh/cmh/projects/detrs/RelTR/data/vg/images/ \
+#             --ann_path /home/cmh/cmh/projects/detrs/RelTR/data/vg/ \
+#             --modelname dab_detr \
+#             --batch_size=4 \
+#             --output_dir /data1/cmh_data/checkpoint_dab_rel_3 \
+#             --epochs 50 \
+#             --lr_drop 40 \
+#             --random_refpoints_xy \
+#             --dropout=0.1 \
+#             --num_entities=200 \
+#             --num_triplets=200 \
+#             --num_select=200 \
+#             --set_cost_class=1 \
+#             --set_cost_class_dab=2 \
+#====================================================================
+
+#wdb94
+#====================================================================
+export CUDA_VISIBLE_DEVICES=1
+torchrun --nproc_per_node=1 \
          --standalone \
          --nnodes=1 \
          cmh_dab_rel_main.py \
@@ -486,8 +536,8 @@ torchrun --nproc_per_node=4 \
             --img_folder /home/cmh/cmh/projects/detrs/RelTR/data/vg/images/ \
             --ann_path /home/cmh/cmh/projects/detrs/RelTR/data/vg/ \
             --modelname dab_detr \
-            --batch_size=4 \
-            --output_dir /data1/cmh_data/checkpoint_dab_rel_2 \
+            --batch_size=8 \
+            --output_dir ./checkpoint_dab_rel_wdb94 \
             --epochs 50 \
             --lr_drop 40 \
             --random_refpoints_xy \
@@ -497,5 +547,7 @@ torchrun --nproc_per_node=4 \
             --num_select=200 \
             --set_cost_class=1 \
             --set_cost_class_dab=2 \
-            --resume="/data1/cmh_data/checkpoint_dab_rel_1/checkpoint0014.pth"
+            --resume="/home/cmh/cmh/projects/detrs/RelTR/checkpoints/wdb_94/wdb94_checkpoint0049.pth" \
+            --eval
+
 #====================================================================

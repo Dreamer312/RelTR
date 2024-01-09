@@ -15,8 +15,8 @@ from datasets import build_dataset, get_coco_api_from_dataset
 from models.DABRelTR.DABRelTR import build_DABRelTR
 from cmh_dab_rel_engine import train_one_epoch, evaluate
 import wandb
-os.environ['WANDB_MODE'] = 'offline'
-# os.environ['WANDB_MODE'] = 'disabled'
+# os.environ['WANDB_MODE'] = 'offline'
+os.environ['WANDB_MODE'] = 'disabled'
 
 def get_args_parser():
     parser = argparse.ArgumentParser('DAB-RelTR', add_help=False)
@@ -172,9 +172,9 @@ def main(args):
     utils.init_distributed_mode(args)
     print("git:\n  {}\n".format(utils.get_sha()))
 
-    if int(os.environ['LOCAL_RANK']) == 0:
-    #if  utils.is_main_process():
-        wandb.init(project="SGG", entity="dreamer0312")
+    # if int(os.environ['LOCAL_RANK']) == 0:
+    # #if  utils.is_main_process():
+    #     wandb.init(project="SGG", entity="dreamer0312")
 
     if args.frozen_weights is not None:
         assert args.masks, "Frozen training is meant for segmentation only"
