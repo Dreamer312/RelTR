@@ -10,6 +10,7 @@ class HungarianMatcher(nn.Module):
                        cost_class_dab = 2, 
                        cost_bbox: float = 1, 
                        cost_giou: float = 1, 
+                       cost_rel: float = 2,
                        iou_threshold: float = 0.7, 
                        focal_alpha = 0.25):
         super().__init__()
@@ -17,6 +18,7 @@ class HungarianMatcher(nn.Module):
         self.cost_class_dab = cost_class_dab
         self.cost_bbox = cost_bbox
         self.cost_giou = cost_giou
+        self.cost_rel = cost_rel
         self.iou_threshold = iou_threshold
         assert cost_class != 0 or cost_bbox != 0 or cost_giou != 0, "all costs cant be 0"
         self.focal_alpha = focal_alpha
@@ -85,7 +87,7 @@ class HungarianMatcher(nn.Module):
 
         # Final triplet cost matrix
         C_rel = self.cost_bbox * cost_sub_bbox + self.cost_bbox * cost_obj_bbox  + \
-                self.cost_class * cost_sub_class + self.cost_class * cost_obj_class + 0.5 * cost_rel_class + \
+                self.cost_class * cost_sub_class + self.cost_class * cost_obj_class + self.cost_rel * cost_rel_class + \
                 self.cost_giou * cost_sub_giou + self.cost_giou * cost_obj_giou
         C_rel = C_rel.view(bs, num_queries_rel, -1).cpu() #torch.Size([bs, 200, 31])
         sizes1 = [len(v["rel_annotations"]) for v in targets]
