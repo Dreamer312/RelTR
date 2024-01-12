@@ -7,16 +7,15 @@ from pathlib import Path
 import numpy as np
 import torch
 from torch.utils.data import DataLoader, DistributedSampler
-import os, sys
-from typing import Optional
-from models.DABRelTR.util import misc as utils  #import DABRelTR.util.misc 
+import os
+os.environ['WANDB_MODE'] = 'disabled'
+from models.DNDABRelTR.util import misc as utils  #import DABRelTR.util.misc 
 from datasets import build_dataset, get_coco_api_from_dataset
 # from models import build_model
-from models.DABRelTR.DABRelTR import build_DABRelTR
-from cmh_dab_rel_engine import train_one_epoch, evaluate
+from models.DNDABRelTR.DABRelTR import build_DNDABRelTR
+from cmh_dn_dab_rel_engine import train_one_epoch, evaluate
 import wandb
-os.environ['WANDB_MODE'] = 'offline'
-# os.environ['WANDB_MODE'] = 'disabled'
+from timm import utils as timm_utils
 
 def get_args_parser():
     parser = argparse.ArgumentParser('DAB-RelTR', add_help=False)
@@ -25,17 +24,38 @@ def get_args_parser():
     parser.add_argument('--lr_backbone', default=1e-5, type=float)
     parser.add_argument('--batch_size', default=2, type=int)
     parser.add_argument('--weight_decay', default=1e-4, type=float)
-    parser.add_argument('--epochs', default=150, type=int)
-    parser.add_argument('--lr_drop', default=100, type=int)
+    parser.add_argument('--epochs', default=50, type=int)
+    parser.add_argument('--lr_drop', default=40, type=int)
     parser.add_argument('--clip_max_norm', default=0.1, type=float,
                         help='gradient clipping max norm')
+
+    
+
+    #=======================DN========================================================
+    # about dn args
+    parser.add_argument('--use_dn', action="store_true",
+                        help="use denoising training.")
+    parser.add_argument('--scalar', default=5, type=int,
+                        help="number of dn groups")
+    parser.add_argument('--label_noise_scale', default=0.2, type=float,
+                        help="label noise ratio to flip")
+    parser.add_argument('--box_noise_scale', default=0.4, type=float,
+                        help="box noise scale to shift and scale")
+    parser.add_argument('--contrastive', action="store_true",
+                        help="use contrastive training.")
+    parser.add_argument('--use_mqs', action="store_true",
+                        help="use mixed query selection from DINO.")
+    parser.add_argument('--use_lft', action="store_true",
+                        help="use look forward twice from DINO.")
+    #=======================DN========================================================
+
 
     # Model parameters
     parser.add_argument('--frozen_weights', type=str, default=None,
                         help="Path to the pretrained model. If set, only the mask head will be trained")
     # * Backbone
     #=======================DAB========================================================
-    parser.add_argument('--modelname', type=str, required=True, choices=['dab_detr', 'dab_deformable_detr'])
+    parser.add_argument('--modelname', type=str, required=True, choices=['dn_dab_detr', 'dab_deformable_detr'])
     #=======================DAB========================================================
 
     parser.add_argument('--backbone', default='resnet50', type=str,
@@ -69,7 +89,7 @@ def get_args_parser():
                         help="Number of attention heads inside the transformer's attentions")
     parser.add_argument('--num_entities', default=300, type=int,
                         help="Number of query slots")
-    parser.add_argument('--num_triplets', default=600, type=int,
+    parser.add_argument('--num_triplets', default=300, type=int,
                         help="Number of query slots")
     parser.add_argument('--pre_norm', action='store_true')
 
@@ -100,16 +120,18 @@ def get_args_parser():
     # * Matcher
     parser.add_argument('--set_cost_class', default=1, type=float, 
                         help="Class coefficient in the matching cost")  #! RelTR: 1, DAB-DETR: 2
+    parser.add_argument('--set_cost_class_dab', default=2, type=float, 
+                        help="Class coefficient in the matching cost")
     parser.add_argument('--set_cost_bbox', default=5, type=float,
                         help="L1 box coefficient in the matching cost")
     parser.add_argument('--set_cost_giou', default=2, type=float,
                         help="giou box coefficient in the matching cost")
     parser.add_argument('--set_iou_threshold', default=0.7, type=float,  # ! Dab没有这个
                         help="giou box coefficient in the matching cost")
-    parser.add_argument('--set_cost_class_dab', default=2, type=float, 
-                        help="Class coefficient in the matching cost")
 
     # * Loss coefficients
+    parser.add_argument('--loss_weight', action='store_true')
+
     parser.add_argument('--bbox_loss_coef', default=5, type=float, 
                         help="loss coefficient for bbox L1 loss")
     parser.add_argument('--giou_loss_coef', default=2, type=float, 
@@ -143,6 +165,7 @@ def get_args_parser():
     # distributed training parameters
     parser.add_argument('--world_size', default=1, type=int,
                         help='number of distributed processes')
+    
     parser.add_argument('--dist_url', default='env://', help='url used to set up distributed training')
 
     parser.add_argument('--return_interm_layers', action='store_true',
@@ -157,24 +180,25 @@ def get_args_parser():
 
 
 def build_model_main(args):
-    if args.modelname.lower() == 'dab_detr':
-        model, criterion, postprocessors, postprocessors_sub, postprocessors_obj = build_DABRelTR(args)
+
+    if args.modelname.lower() == 'dn_dab_detr':
+        #model, criterion, postprocessors = build_DABRelTR(args)
+        model, criterion, postprocessors, postprocess_sub, postprocess_obj = build_DNDABRelTR(args)
     # elif args.modelname.lower() == 'dab_deformable_detr':
     #     model, criterion, postprocessors = build_dab_deformable_detr(args)
     else:
         raise NotImplementedError
 
     #return model, criterion, postprocessors
-    return model, criterion, postprocessors, postprocessors_sub, postprocessors_obj
+    return model, criterion, postprocessors, postprocess_sub, postprocess_obj
 
 
 def main(args):
     utils.init_distributed_mode(args)
     print("git:\n  {}\n".format(utils.get_sha()))
 
-    if int(os.environ['LOCAL_RANK']) == 0:
-    #if  utils.is_main_process():
-        wandb.init(project="SGG", entity="dreamer0312")
+    # if int(os.environ['LOCAL_RANK']) == 0:
+    #     wandb.init(project="SGG", entity="dreamer0312")
 
     if args.frozen_weights is not None:
         assert args.masks, "Frozen training is meant for segmentation only"
@@ -189,9 +213,12 @@ def main(args):
     random.seed(seed)
 
 
-    model, criterion, postprocessors, postprocessors_sub, postprocessors_obj = build_model_main(args)
-    #model, criterion, postprocessors = build_model(args)
-    print(model)
+    #model, criterion, postprocessors = build_model_main(args)
+    model, criterion, postprocessors, postprocess_sub, postprocess_obj = build_model_main(args)
+    ema_model = timm_utils.ModelEmaV2(model, decay=0.9998, device=None)
+    ema_model.to(device)
+
+    # print(model)
     model.to(device)
 
     model_without_ddp = model
@@ -215,9 +242,9 @@ def main(args):
     dataset_train = build_dataset(image_set='train', args=args)
     dataset_val = build_dataset(image_set='val', args=args)
 
-    # dataset_size = len(dataset_train)
-    # train_size = int(0.3 * dataset_size)
 
+    # dataset_size = len(dataset_train)
+    # train_size = int(0.05 * dataset_size)
     # # 使用切片操作来分割数据集
     # dataset_train = torch.utils.data.Subset(dataset_train, indices=range(train_size))
 
@@ -252,7 +279,7 @@ def main(args):
         # del checkpoint['optimizer']
         if not args.eval and 'optimizer' in checkpoint and 'lr_scheduler' in checkpoint and 'epoch' in checkpoint:
             optimizer.load_state_dict(checkpoint['optimizer'])
-            #lr_scheduler.load_state_dict(checkpoint['lr_scheduler'])
+            lr_scheduler.load_state_dict(checkpoint['lr_scheduler'])
             args.start_epoch = checkpoint['epoch'] + 1
 
     if args.eval:
@@ -261,40 +288,46 @@ def main(args):
         if args.output_dir:
             utils.save_on_master(coco_evaluator.coco_eval["bbox"].eval, output_dir / "eval.pth")
         return
-    
-    # valid = True
-    # if valid and not args.eval:
-    #     print(f"valid mode, It is the checkpoint{checkpoint['epoch']}")
-    #     test_stats, coco_evaluator = evaluate(model, criterion, postprocessors, postprocessors_sub, postprocessors_obj, data_loader_val, base_ds, device, args)
-    #     return
-    
+
+
+    valid = False
+    if valid:
+        print(f"valid mode, It is the {checkpoint['epoch']} checkpoint")
+        #test_stats, coco_evaluator = evaluate(model, criterion, postprocessors, postprocess_sub, postprocess_obj, data_loader_val, base_ds, device, args)
+        test_stats, coco_evaluator = evaluate(model, criterion, postprocessors, data_loader_val, base_ds, device, args)
+        return
+
+
     print("Start training")
     start_time = time.time()
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
             sampler_train.set_epoch(epoch)
-        train_stats = train_one_epoch(model, criterion, data_loader_train, optimizer, device, epoch, args.clip_max_norm, wandb_logger = wandb)
+        train_stats = train_one_epoch(model, ema_model, criterion, data_loader_train, optimizer, device, epoch, args.clip_max_norm, wandb_logger = wandb, args=args)
+        ema_weight = timm_utils.get_state_dict(ema_model, timm_utils.unwrap_model)
         lr_scheduler.step()
         if args.output_dir:
             checkpoint_paths = [output_dir / 'checkpoint.pth'] # anti-crash
             # extra checkpoint before LR drop and every 100 epochs
             if (epoch + 1) % args.lr_drop == 0 or (epoch + 1) % 5 == 0:
                 checkpoint_paths.append(output_dir / f'checkpoint{epoch:04}.pth')
-
-
-      
             for checkpoint_path in checkpoint_paths:
                 utils.save_on_master({
                     'model': model_without_ddp.state_dict(),
+                    'ema_model' : ema_weight,
                     'optimizer': optimizer.state_dict(),
                     'lr_scheduler': lr_scheduler.state_dict(),
                     'epoch': epoch,
                     'args': args,
                 }, checkpoint_path)
-
+        
+        # for k,v in train_stats.items():
+        #     print(f'{k}: {v}')
+        
+        # assert(0)
 
         test_stats, coco_evaluator = evaluate(model, criterion, postprocessors, data_loader_val, base_ds, device, args, wandb_logger = wandb)
-        
+
         log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
                      **{f'test_{k}': v for k, v in test_stats.items()},
                      'epoch': epoch,
@@ -304,16 +337,8 @@ def main(args):
             with (output_dir / "log.txt").open("a") as f:
                 f.write(json.dumps(log_stats) + "\n")
 
-            # for evaluation logs
-            # if coco_evaluator is not None:
-            #     (output_dir / 'eval').mkdir(exist_ok=True)
-            #     if "bbox" in coco_evaluator.coco_eval:
-            #         filenames = ['latest.pth']
-            #         if epoch % 50 == 0:
-            #             filenames.append(f'{epoch:03}.pth')
-            #         for name in filenames:
-            #             torch.save(coco_evaluator.coco_eval["bbox"].eval,
-            #                        output_dir / "eval" / name)
+        
+        # for iou_type, coco_eval in coco_evaluator.coco_eval.items():
         stats = coco_evaluator.coco_eval["bbox"].stats
         coco_result = {
                         f"AP": round(stats[0], 3),    # 平均精度 AP (IoU=0.50:0.95) - 所有区域大小
@@ -331,6 +356,19 @@ def main(args):
                     }
         if int(os.environ['LOCAL_RANK']) == 0:
             wandb.log(coco_result)
+        #print(coco_result)
+
+
+            # # for evaluation logs
+            # if coco_evaluator is not None:
+            #     (output_dir / 'eval').mkdir(exist_ok=True)
+            #     if "bbox" in coco_evaluator.coco_eval:
+            #         filenames = ['latest.pth']
+            #         if epoch % 50 == 0:
+            #             filenames.append(f'{epoch:03}.pth')
+            #         for name in filenames:
+            #             torch.save(coco_evaluator.coco_eval["bbox"].eval,
+            #                        output_dir / "eval" / name)
 
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))

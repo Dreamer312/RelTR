@@ -1,5 +1,4 @@
 import math
-from typing import Dict
 import torch
 import torch.nn.functional as F
 from torch import nn
@@ -13,7 +12,7 @@ from .dabrel_transformer import build_transformer
 from .matcher import build_matcher
 from .util import box_ops
 
-from .dn_components import prepare_for_dn, dn_post_process, compute_dn_loss
+from .dn_components import prepare_for_dn, prepare_for_dn_tri, dn_post_process, dn_post_process_tri, compute_dn_loss
 
 
 def sigmoid_focal_loss(inputs, targets, num_boxes, alpha: float = 0.25, gamma: float = 2, weights=None):
@@ -103,6 +102,7 @@ class DABRelTR(nn.Module):
         #=============================一致的地方================================================
         super().__init__()
         self.num_queries = num_queries
+        self.num_triplets = num_triplets
         self.transformer = transformer
         #hidden_dim = 256 if transformer==None else transformer.d_model
         self.hidden_dim = hidden_dim = transformer.d_model
@@ -141,8 +141,9 @@ class DABRelTR(nn.Module):
                 
         #===========================我加的=========================================
         #另外的600个subject和600个object的框子
-        self.refpoint_embed_triplets = nn.Embedding(num_triplets, query_dim) #Embedding(600, 4)
 
+
+        self.refpoint_embed_triplets = nn.Embedding(num_triplets, query_dim) #Embedding(600, 4)
 
 
         self.random_refpoints_xy = random_refpoints_xy
@@ -226,9 +227,6 @@ class DABRelTR(nn.Module):
                                         nn.ReLU(inplace=True),
                                         nn.Linear(512, 128))
 
-        # predicate classification
-        # 640 256 256 52
-        
         #=============================================================================
 
     #def forward(self, samples: NestedTensor):
@@ -247,41 +245,27 @@ class DABRelTR(nn.Module):
 
         
         #?=============================DN================================================
-        # prepare for dn
-        #input_query_label [390,bs,256] 
-        # input_query_bbox [390,bs,4] 
-        # attn_mask [390,390] 
         input_query_label, input_query_bbox, attn_mask, mask_dict = \
             prepare_for_dn(dn_args, embedweight, src.size(0), self.training, self.num_queries, self.num_classes,
                            self.hidden_dim, self.label_enc)
+        
+        input_query_label_tri, input_query_bbox_tri, attn_mask_tri, mask_dict_tri = \
+            prepare_for_dn_tri(dn_args, self.refpoint_embed_triplets.weight, src.size(0), self.training, self.num_triplets, self.num_classes,
+                           self.hidden_dim, self.label_enc, mask_dict_entity=mask_dict, input_query_label_entity=input_query_label)
         
         result = self.transformer(
                                     src=self.input_proj(src), 
                                     mask=mask, 
                                     refpoint_embed=input_query_bbox,  #? input_query_bbox
-                                    refpoint_embed_triplets=self.refpoint_embed_triplets.weight, #todo 记得对tri也做dn处理
+                                    refpoint_embed_triplets=input_query_bbox_tri, 
                                     so_embed=self.so_embed.weight, 
                                     pos_embed=pos[-1],
                                     tgt=input_query_label,  #? input_query_label
-                                    attn_mask=attn_mask  #? attn_mask
+                                    attn_mask=attn_mask,  #? attn_mask
+                                    tgt_tri = input_query_label_tri,
+                                    attn_mask_tri = attn_mask_tri,
                                  )
         #?=============================DN================================================
-        #result:{hs:[6,bs,300,256]
-        #        reference:[6,bs,300,4]
-        #        hs_sub:[6,bs,600,256]
-        #        reference_sub:[6,bs,600,4]
-        #        hs_obj:[6,bs,600,256]
-        #        reference_obj:[6,bs,600,4]
-        #        so_mask:torch.Size([6, bs, 600, 2, 25, 40])    
-        # }
-        # result = self.transformer(self.input_proj(src), 
-        #                                  mask, embedweight, 
-        #                                  self.refpoint_embed_triplets.weight, 
-        #                                  self.so_embed.weight, 
-        #                                  pos[-1])
-        # hs torch.Size([6, bs, 300, 256]) 6应该是6层
-        # references torch.Size([6, bs, 300, 4])
-        
         hs = result["hs"]
         reference = result["reference"]
         if not self.bbox_embed_diff_each_layer:
@@ -289,6 +273,7 @@ class DABRelTR(nn.Module):
             tmp = self.bbox_embed(hs) #torch.Size([6, bs, 300, 4])
             tmp[..., :self.query_dim] += reference_before_sigmoid
             outputs_coord = tmp.sigmoid() # torch.Size([6, bs, 300, 4])
+
         else:
             reference_before_sigmoid = inverse_sigmoid(reference)
             outputs_coords = []
@@ -337,7 +322,17 @@ class DABRelTR(nn.Module):
         # outputs_class [6,bs,390,151]           outputs_coord [6,bs,390,4]
         outputs_class, outputs_coord = dn_post_process(outputs_class, outputs_coord, mask_dict)
         #todo return out, mask_dict
+
+        outputs_class_sub, outputs_class_obj, outputs_coord_sub, outputs_coord_obj, outputs_class_rel \
+                                    = dn_post_process_tri(outputs_class_sub=outputs_class_sub, 
+                                                          outputs_coord_sub=outputs_coord_sub, 
+                                                          outputs_class_obj=outputs_class_obj, 
+                                                          outputs_coord_obj=outputs_coord_obj,
+                                                          output_rel=outputs_class_rel, 
+                                                          mask_dict=mask_dict_tri)
+        
         #?=============================DN================================================
+
 
 
         out = {'pred_logits': outputs_class[-1], 'pred_boxes': outputs_coord[-1],
@@ -346,25 +341,10 @@ class DABRelTR(nn.Module):
                'rel_logits': outputs_class_rel[-1]
                }
 
-
-    #     if self.aux_loss:      #默认使用
-    #         out['aux_outputs'] = self._set_aux_loss(outputs_class, outputs_coord)
-    #     # return out
-    # #=============================DAB================================================
-
-    # #=============================REL================================================
-
-
-    #     outputs_class_rel = self.rel_class_embed(torch.cat((hs_sub, hs_obj, so_masks), dim=-1)) # torch.Size([6, bs, 200, 52])
-
-    #     out = {'pred_logits': outputs_class[-1], 'pred_boxes': outputs_coord[-1],
-    #            'sub_logits': outputs_class_sub[-1], 'sub_boxes': outputs_coord_sub[-1],
-    #            'obj_logits': outputs_class_obj[-1], 'obj_boxes': outputs_coord_obj[-1],
-    #            'rel_logits': outputs_class_rel[-1]}
         if self.aux_loss:
             out['aux_outputs'] = self._set_aux_loss(outputs_class, outputs_coord, outputs_class_sub, outputs_coord_sub,
                                                     outputs_class_obj, outputs_coord_obj, outputs_class_rel)
-        return out, mask_dict
+        return out, mask_dict, mask_dict_tri
 
     @torch.jit.unused
     def _set_aux_loss(self, outputs_class, outputs_coord, outputs_class_sub, outputs_coord_sub,
@@ -452,11 +432,8 @@ class SetCriterion(nn.Module):
                 all_loss_weight = torch.cat((torch.ones(pred_logits.shape[:2]).to(pred_logits.device), indices[2]*0.5, indices[3]*0.5), dim=-1)
             loss_ce = sigmoid_focal_loss(src_logits, target_classes_onehot, num_boxes, alpha=self.focal_alpha, gamma=2, weights=all_loss_weight) * src_logits.shape[1]
 
-            #TODO Weight the loss if necessary
-            #! 先不加原版rel的weight了
-            # Adjust these weights based on your requirements
-            # loss_weight = torch.cat((torch.ones(pred_logits.shape[:2]), indices[2]*0.5, indices[3]*0.5), dim=-1).to(pred_logits.device)
-            # losses = {'loss_ce': (loss_ce * loss_weight).sum() / num_boxes}
+
+
 
             losses = {'loss_ce': loss_ce}
             # Calculate classification errors (optional)
@@ -492,9 +469,6 @@ class SetCriterion(nn.Module):
         return losses
 
 
-
-
-
     @torch.no_grad()
     def loss_cardinality(self, outputs, targets, indices, num_boxes):
         """ Compute the cardinality error, ie the absolute error in the number of predicted non-empty boxes
@@ -509,6 +483,7 @@ class SetCriterion(nn.Module):
         losses = {'cardinality_error': card_err}
         return losses
     
+
 
 
     def loss_boxes(self, outputs, targets, indices, num_boxes):
@@ -563,8 +538,8 @@ class SetCriterion(nn.Module):
         return loss_map[loss](outputs, targets, indices, num_boxes, **kwargs)
 
 
-    def forward(self, outputs, targets, mask_dict=None, return_indices=False):
-    #def forward(self, outputs, targets):
+    def forward(self, outputs, targets, mask_dict=None, mask_dict_tri=None):
+    
         outputs_without_aux = {k: v for k, v in outputs.items() if k != 'aux_outputs'}
         indices = self.matcher(outputs_without_aux, targets)
         self.indices = indices
@@ -597,7 +572,7 @@ class SetCriterion(nn.Module):
         aux_num = 0
         if 'aux_outputs' in outputs:
             aux_num = len(outputs['aux_outputs'])
-        dn_losses = compute_dn_loss(mask_dict, self.training, aux_num, self.focal_alpha)
+        dn_losses = compute_dn_loss(mask_dict, mask_dict_tri, self.training, aux_num, self.focal_alpha)
         losses.update(dn_losses)
         #?=============================DN================================================
 
@@ -753,6 +728,7 @@ def build_DNDABRelTR(args):
         weight_dict['tgt_loss_ce'] = args.cls_loss_coef
         weight_dict['tgt_loss_bbox'] = args.bbox_loss_coef
         weight_dict['tgt_loss_giou'] = args.giou_loss_coef
+        weight_dict['tgt_loss_rel'] = args.rel_loss_coef
     #?=============================DN================================================
 
     # TODO this is a hack
@@ -761,7 +737,6 @@ def build_DNDABRelTR(args):
         for i in range(args.dec_layers - 1):
             aux_weight_dict.update({k + f'_{i}': v for k, v in weight_dict.items()})
         weight_dict.update(aux_weight_dict)
-
 
     losses = ['labels', 'boxes', 'cardinality', "relations"]
 

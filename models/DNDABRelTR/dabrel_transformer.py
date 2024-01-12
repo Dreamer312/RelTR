@@ -123,7 +123,7 @@ class Transformer(nn.Module):
                 nn.init.xavier_uniform_(p)
 
     #def forward(self, src, mask, refpoint_embed, refpoint_embed_triplets, so_embed, pos_embed):
-    def forward(self, src, mask, refpoint_embed, refpoint_embed_triplets, so_embed, pos_embed, tgt, attn_mask=None):
+    def forward(self, src, mask, refpoint_embed, refpoint_embed_triplets, so_embed, pos_embed, tgt, attn_mask=None, tgt_tri=None, attn_mask_tri=None):
         # flatten NxCxHxW to HWxNxC
         bs, c, h, w = src.shape #torch.Size([bs, 256, 25, 40])
         src = src.flatten(2).permute(2, 0, 1) # torch.Size([1000, bs, 256])
@@ -132,16 +132,16 @@ class Transformer(nn.Module):
         mask = mask.flatten(1) #torch.Size([bs, 1000])      
 
         #===================================我加的==============================================  
-        
         so_embed = so_embed #[2,256]
-        refpoint_embed_triplets = refpoint_embed_triplets.unsqueeze(1).repeat(1, bs, 1) # [600, bs, 4]
-        num_queries_triplets = refpoint_embed_triplets.shape[0]
-        tgt_triplets = torch.zeros(num_queries_triplets, bs, self.d_model*2, device=refpoint_embed_triplets.device)#torch.Size([600, bs, 512])
+        #refpoint_embed_triplets = refpoint_embed_triplets.unsqueeze(1).repeat(1, bs, 1) 
+        # refpoint_embed_sub, refpoint_embed_obj = refpoint_embed_triplets
+        # num_queries_triplets = refpoint_embed_sub.shape[0]
+        # tgt_triplets = torch.zeros(num_queries_triplets, bs, self.d_model*2)#torch.Size([600, bs, 512])
+        # tgt_triplets2_sub, tgt_triplets2_obj = tgt_tri
         #===================================我加的==============================================  
 
         memory = self.encoder(src, src_key_padding_mask=mask, pos=pos_embed) ## torch.Size([1000, bs, 256])
 
-        
         #?=============================DN================================================
         if self.num_patterns > 0:
             l = tgt.shape[0]
@@ -150,7 +150,7 @@ class Transformer(nn.Module):
 
         result, sub_maps, obj_maps = self.decoder(
                                                     tgt=tgt,
-                                                    tgt_triplets=tgt_triplets,
+                                                    tgt_triplets=tgt_tri,
                                                     memory=memory,
                                                     tgt_mask=attn_mask,  
                                                     memory_mask=None,  
@@ -159,7 +159,8 @@ class Transformer(nn.Module):
                                                     pos=pos_embed,
                                                     so_embed=so_embed,
                                                     refpoints_unsigmoid=refpoint_embed,
-                                                    refpoints_unsigmoid_triplets=refpoint_embed_triplets
+                                                    refpoints_unsigmoid_triplets=refpoint_embed_triplets,
+                                                    attn_mask_tri = attn_mask_tri
                                                 )
         #?=============================DN================================================
 
@@ -280,15 +281,18 @@ class TransformerDecoder(nn.Module):
                 pos: Optional[Tensor] = None,
                 so_embed = None,
                 refpoints_unsigmoid: Optional[Tensor] = None, # num_queries, bs, 2
-                refpoints_unsigmoid_triplets: Optional[Tensor] = None
+                refpoints_unsigmoid_triplets: Optional[Tensor] = None,
+                attn_mask_tri=None
                 ):
         
         output = tgt  #torch.Size([300, bs, 256]) 全0
 
         #===================================我加的==============================================
-        output_sub, output_obj = torch.split(tgt_triplets, self.d_model, dim=2) # torch.Size([600, bs, 256]) torch.Size([600, bs, 256])
-        reference_points_sub = refpoints_unsigmoid_triplets.sigmoid() #torch.Size([600, bs, 4])
-        reference_points_obj = refpoints_unsigmoid_triplets.sigmoid()
+        #output_sub, output_obj = torch.split(tgt_triplets, self.d_model, dim=2) # torch.Size([600, bs, 256]) torch.Size([600, bs, 256])
+        output_sub, output_obj = tgt_triplets
+        refpoints_unsigmoid_sub, refpoints_unsigmoid_obj = refpoints_unsigmoid_triplets
+        reference_points_sub = refpoints_unsigmoid_sub.sigmoid() #torch.Size([600, bs, 4])
+        reference_points_obj = refpoints_unsigmoid_obj.sigmoid()
         ref_points_sub = [reference_points_sub]
         ref_points_obj = [reference_points_obj]
         intermediate_output_sub = []
@@ -397,7 +401,9 @@ class TransformerDecoder(nn.Module):
                                                                         query_sine_embed_sub=query_sine_embed_sub,
                                                                         query_sine_embed_obj=query_sine_embed_obj,
                                                                         so_embed = so_embed,
-                                                                        is_first=(layer_id == 0))
+                                                                        is_first=(layer_id == 0),
+                                                                        attn_mask_tri = attn_mask_tri,
+                                                                        )
 
             # iter update
             if self.bbox_embed is not None:
@@ -649,7 +655,8 @@ class TransformerDecoderLayer(nn.Module):
                       query_sine_embed_sub = None,
                       query_sine_embed_obj = None,
                       so_embed = None,
-                      is_first = False):
+                      is_first = False,
+                      attn_mask_tri = None):
         
         # Part 1 DABDETR
         # ========== Begin of Self-Attention =============
@@ -720,42 +727,9 @@ class TransformerDecoderLayer(nn.Module):
 
 
         #===================================我加的==============================================
-
+        attn_mask_csa, attn_mask_dea = attn_mask_tri
         # Part 2 subject query part
         t_num = query_pos_sub.shape[0]
-        h_dim = query_pos_sub.shape[2]
-
-        # implementation 1
-        # q_content_sub = self.sa_qcontent_so_proj((tgt_sub+so_embed[0]))
-        # q_pos_sub = self.sa_qpos_so_proj(query_pos_sub)
-        # k_content_sub = self.sa_kcontent_so_proj((tgt_sub+so_embed[0]))
-        # k_pos_sub = self.sa_kpos_so_proj(query_pos_sub)
-        # v_sub = self.sa_v_so_proj((tgt_sub+so_embed[0]))
-
-        # q_content_obj = self.sa_qcontent_so_proj((tgt_obj+so_embed[1]))
-        # q_pos_obj = self.sa_qpos_so_proj(query_pos_obj)
-        # k_content_obj = self.sa_kcontent_so_proj((tgt_obj+so_embed[1]))
-        # k_pos_obj = self.sa_kpos_so_proj(query_pos_obj)
-        # v_obj = self.sa_v_so_proj((tgt_obj+so_embed[1]))
-
-        # q_content_so = torch.cat((q_content_sub, q_content_obj), dim=0)
-        # k_content_so = torch.cat((k_content_sub, k_content_obj), dim=0)
-        # q_pos_so = torch.cat((q_pos_sub, q_pos_obj), dim=0)
-        # k_pos_so = torch.cat((k_pos_sub, k_pos_obj), dim=0)
-
-        # q_so = q_content_so + q_pos_so
-        # k_so = k_content_so + k_pos_so
-        # v_so = torch.cat((v_sub, v_obj), dim=0)
-
-
-
-
-        #这个是reltr的实现，注意tgt_sub和tgt_obj都加了相同的位置编码triplet_pos，但是在我这里先使用了不同的编码
-        # q_sub = k_sub = self.with_pos_embed(self.with_pos_embed(tgt_sub, triplet_pos), so_pos[0])  #so_pos [2,256]
-        # q_obj = k_obj = self.with_pos_embed(self.with_pos_embed(tgt_obj, triplet_pos), so_pos[1])
-
-
-        #implementation 2
         tgt_so = torch.cat(((tgt_sub+so_embed[0]), (tgt_obj+so_embed[1])), dim=0)
         query_pos_so = torch.cat((query_pos_sub, query_pos_obj), dim=0)
         q_content_so_2 = self.sa_qcontent_so_proj(tgt_so)
@@ -766,7 +740,7 @@ class TransformerDecoderLayer(nn.Module):
         q_so_2 = q_content_so_2 + q_pos_so_2 # [1200, bs, 256]
 
         k_so_2 = k_content_so_2 + k_pos_so_2
-        tgt2_so = self.coupled_self_attn_so(q_so_2, k_so_2, v_so_2)[0] # [1200, bs, 256]
+        tgt2_so = self.coupled_self_attn_so(q_so_2, k_so_2, v_so_2, attn_mask=attn_mask_csa)[0] # [1200, bs, 256]
         tgt_so = tgt_so + self.dropout2_so(tgt2_so) # [1200, bs, 256]
 
         tgt_so = self.norm2_so(tgt_so) # [1200, bs, 256]
@@ -848,7 +822,7 @@ class TransformerDecoderLayer(nn.Module):
         tgt2_sub_dea = self.sub_dea_cross_attn( query=q_sub_dea,
                                                 key=k_sub_dea,
                                                 value=v_sub_dea,
-                                                attn_mask=None,
+                                                attn_mask=attn_mask_dea,
                                                 key_padding_mask=None
                                                )[0]
         
@@ -915,7 +889,7 @@ class TransformerDecoderLayer(nn.Module):
         tgt2_obj_dea = self.obj_dea_cross_attn( query=q_obj_dea,
                                                 key=k_obj_dea,
                                                 value=v_obj_dea,
-                                                attn_mask=None,
+                                                attn_mask=attn_mask_dea,
                                                 key_padding_mask=None
                                                )[0]
         
