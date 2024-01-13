@@ -553,18 +553,40 @@
 #====================================================================
 
 
+# #====================================================================
+# torchrun --nproc_per_node=2 \
+#          --standalone \
+#          --nnodes=1 \
+#          cmh_dab_rel_main.py \
+#             --dataset vg \
+#             --img_folder /home/cmh/cmh/projects/detrs/RelTR/data/vg/images/ \
+#             --ann_path /home/cmh/cmh/projects/detrs/RelTR/data/vg/ \
+#             --modelname dab_detr \
+#             --batch_size=8 \
+#             --output_dir ./checkpoint_dab_rel_wdb112 \
+#             --epochs 50 \
+#             --lr_drop 40 \
+#             --random_refpoints_xy \
+#             --dropout=0.1 \
+#             --num_entities=200 \
+#             --num_triplets=300 \
+#             --num_select=200 \
+#             --set_cost_class=2 \
+#             --set_cost_class_dab=2 \
+# #====================================================================
+
+
 #====================================================================
-export CUDA_VISIBLE_DEVICES=1,3
-torchrun --nproc_per_node=2 \
+torchrun --nproc_per_node=4 \
          --standalone \
          --nnodes=1 \
-         cmh_dab_rel_main.py \
+         cmh_dn_dab_rel_main.py \
             --dataset vg \
-            --img_folder /home/cmh/cmh/projects/detrs/RelTR/data/vg/images/ \
-            --ann_path /home/cmh/cmh/projects/detrs/RelTR/data/vg/ \
-            --modelname dab_detr \
-            --batch_size=8 \
-            --output_dir ./checkpoint_dab_rel_wdb104 \
+            --img_folder /root/autodl-tmp/vg/images/ \
+            --ann_path /root/autodl-tmp/vg/ \
+            --modelname dn_dab_detr \
+            --batch_size=4 \
+            --output_dir /root/autodl-tmp/checkpoint_dn_dab_rel_119 \
             --epochs 50 \
             --lr_drop 40 \
             --random_refpoints_xy \
@@ -574,6 +596,9 @@ torchrun --nproc_per_node=2 \
             --num_select=200 \
             --set_cost_class=2 \
             --set_cost_class_dab=2 \
-            --resume="/home/cmh/cmh/projects/detrs/RelTR/checkpoints/checkpoint_wdb104/checkpoint.pth" \
-            --eval
+            --use_dn \
+            --scalar=5 \
+            --label_noise_scale=0.2 \
+            --box_noise_scale=0.4 \
+            # --resume="/root/autodl-tmp/checkpoint_dn_dab_rel_114/checkpoint.pth"
 #====================================================================

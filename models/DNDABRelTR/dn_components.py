@@ -212,9 +212,10 @@ def prepare_for_dn_tri(dn_args, embedweight_triplets, batch_size, training, num_
     tgt = torch.cat([tgt, indicator0], dim=1) #[300, 256]
 
     refpoint_emb = embedweight_triplets.repeat(num_patterns, 1)  # [300, 4]
-    target_sub_boxes, target_sub_labels, target_obj_boxes, target_obj_labels, batch_idx, known_num, rel_labels = extract_sub_obj_tensors(targets)
+    
 
     if training:
+        target_sub_boxes, target_sub_labels, target_obj_boxes, target_obj_labels, batch_idx, known_num, rel_labels = extract_sub_obj_tensors(targets)
         known_bid = batch_idx.repeat(scalar, 1).view(-1)
         known_labels_sub = target_sub_labels.repeat(scalar, 1).view(-1)
         known_labels_obj = target_obj_labels.repeat(scalar, 1).view(-1)
@@ -352,6 +353,7 @@ def prepare_for_dn_tri(dn_args, embedweight_triplets, batch_size, training, num_
         input_query_bbox_sub = input_query_bbox.clone()
         input_query_bbox_obj = input_query_bbox.clone()
         attn_mask = None
+        attn_mask_dea = None
         mask_dict = None
 
     input_query_label_sub = input_query_label_sub.transpose(0, 1)
@@ -400,12 +402,12 @@ def dn_post_process_tri(outputs_class_sub, outputs_coord_sub, outputs_class_obj,
         outputs_coord_sub = outputs_coord_sub[:, :, mask_dict['pad_size']:, :]  # [6,bs,300,4]
         outputs_class_obj = outputs_class_obj[:, :, mask_dict['pad_size']:, :]  # [6,bs,300,151]
         outputs_coord_obj = outputs_coord_obj[:, :, mask_dict['pad_size']:, :]  # [6,bs,300,4]
-        outputs_rel = output_rel[:, :, mask_dict['pad_size']:, :] # [6,bs,300,51]
+        output_rel = output_rel[:, :, mask_dict['pad_size']:, :] # [6,bs,300,51]
 
         mask_dict['output_known_lbs_bboxes_sub']=(output_known_class_sub,output_known_coord_sub)
         mask_dict['output_known_lbs_bboxes_obj']=(output_known_class_obj,output_known_coord_obj)
         mask_dict['output_known_rel']=output_known_rel
-    return outputs_class_sub, outputs_class_obj, outputs_coord_sub, outputs_coord_obj, outputs_rel
+    return outputs_class_sub, outputs_class_obj, outputs_coord_sub, outputs_coord_obj, output_rel
 
 # def prepare_for_loss(mask_dict):
 #     """
@@ -602,7 +604,7 @@ def compute_dn_loss(mask_dict, mask_dict_tri, training, aux_num, focal_alpha):
                 l_dict = {k + f'_{i}': v for k, v in l_dict.items()}
                 losses.update(l_dict)
 
-                l_dict = tgt_loss_relation(output_known_rel[i], known_labels, focal_alpha)
+                l_dict = tgt_loss_relation(output_known_rel[i], known_rel, focal_alpha)
                 l_dict = {k + f'_{i}': v for k, v in l_dict.items()}
                 losses.update(l_dict)
             else:

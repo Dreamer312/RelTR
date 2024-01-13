@@ -34,7 +34,7 @@ def train_one_epoch(model: torch.nn.Module, ema_model, criterion: torch.nn.Modul
         need_tgt_for_training = False
 
     model.train()
-    # criterion.train()
+    criterion.train()
     metric_logger = utils.MetricLogger(delimiter="  ")
     metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
     metric_logger.add_meter('class_error', utils.SmoothedValue(window_size=1, fmt='{value:.2f}'))
@@ -138,6 +138,10 @@ def train_one_epoch(model: torch.nn.Module, ema_model, criterion: torch.nn.Modul
 def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, args, wandb_logger=None):
     model.eval()
     criterion.eval()
+    try:
+        need_tgt_for_training = args.use_dn
+    except:
+        need_tgt_for_training = False
 
     metric_logger = utils.MetricLogger(delimiter="  ")
     metric_logger.add_meter('class_error', utils.SmoothedValue(window_size=1, fmt='{value:.2f}'))
@@ -172,8 +176,12 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, arg
         samples = samples.to(device)
         #* targets = [{k: to_device(v, device) for k, v in t.items()} for t in targets] DAB版
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
+        if need_tgt_for_training:
+            outputs, _, _ = model(samples, dn_args=args.num_patterns)
+        else:
+            outputs = model(samples)
 
-        outputs = model(samples)
+        #outputs = model(samples)
         loss_dict = criterion(outputs, targets)
         weight_dict = criterion.weight_dict
 
