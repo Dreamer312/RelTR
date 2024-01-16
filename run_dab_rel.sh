@@ -577,7 +577,32 @@
 
 
 #====================================================================
-torchrun --nproc_per_node=4 \
+# torchrun --nproc_per_node=8 \
+#          --standalone \
+#          --nnodes=1 \
+#          cmh_dn_dab_rel_main.py \
+#             --dataset vg \
+#             --img_folder /root/autodl-tmp/vg/images/ \
+#             --ann_path /root/autodl-tmp/vg/ \
+#             --modelname dn_dab_detr \
+#             --batch_size=2 \
+#             --output_dir /root/autodl-tmp/checkpoint_dn_dab_rel_120 \
+#             --epochs 50 \
+#             --lr_drop 40 \
+#             --random_refpoints_xy \
+#             --dropout=0.1 \
+#             --num_entities=200 \
+#             --num_triplets=300 \
+#             --num_select=200 \
+#             --set_cost_class=2 \
+#             --set_cost_class_dab=2 \
+#             --use_dn \
+#             --scalar=5 \
+#             --label_noise_scale=0.2 \
+#             --box_noise_scale=0.4 \
+            # --resume="/root/autodl-tmp/checkpoint_dn_dab_rel_114/checkpoint.pth"
+
+torchrun --nproc_per_node=8 \
          --standalone \
          --nnodes=1 \
          cmh_dn_dab_rel_main.py \
@@ -585,8 +610,8 @@ torchrun --nproc_per_node=4 \
             --img_folder /root/autodl-tmp/vg/images/ \
             --ann_path /root/autodl-tmp/vg/ \
             --modelname dn_dab_detr \
-            --batch_size=4 \
-            --output_dir /root/autodl-tmp/checkpoint_dn_dab_rel_119 \
+            --batch_size=2 \
+            --output_dir /root/autodl-tmp/checkpoint_dn_dab_rel_120 \
             --epochs 50 \
             --lr_drop 40 \
             --random_refpoints_xy \
@@ -600,5 +625,6 @@ torchrun --nproc_per_node=4 \
             --scalar=5 \
             --label_noise_scale=0.2 \
             --box_noise_scale=0.4 \
-            # --resume="/root/autodl-tmp/checkpoint_dn_dab_rel_114/checkpoint.pth"
+            --eval \
+            --resume="/root/autodl-tmp/checkpoint_dn_dab_rel_120/checkpoint.pth"
 #====================================================================
