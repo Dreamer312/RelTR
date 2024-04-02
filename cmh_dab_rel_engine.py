@@ -172,8 +172,10 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
 
         #print(loss_dict_reduced_scaled)
         #print(loss_dict_reduced_unscaled)
-
-        if  int(os.environ['LOCAL_RANK']) == 0:
+        local_rank = int(os.environ.get('LOCAL_RANK', 0))
+        # 使用os.environ.get()获取'WORLD_SIZE'，如果未设置则默认为1
+        world_size = int(os.environ.get('WORLD_SIZE', 1))
+        if local_rank == 0 and world_size > 1:
             wandb_logger.log({
                 "loss": loss_value,
                 "class_error": loss_dict_reduced['class_error'],

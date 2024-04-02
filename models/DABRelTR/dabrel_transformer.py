@@ -299,11 +299,20 @@ class TransformerDecoder(nn.Module):
         intermediate_objmaps = []
         #===================================我加的==============================================
 
+        output = tgt
         intermediate = []
         reference_points = refpoints_unsigmoid.sigmoid() # torch.Size([300, bs, 4])
         ref_points = [reference_points]
 
-        # import ipdb; ipdb.set_trace()        
+        
+        #*===================================1tomany==============================================
+        output_cdecoder = tgt
+        intermediate_cdecoder = []
+        reference_points_cdecoder = reference_points      
+        ref_points_cdecoder = [reference_points_cdecoder]
+        #*===================================1tomany==============================================
+
+   
 
         for layer_id, layer in enumerate(self.layers):
             obj_center = reference_points[..., :self.query_dim]     # [num_queries, batch_size, 4]
@@ -346,6 +355,22 @@ class TransformerDecoder(nn.Module):
 
                 # a = query_sine_embed2.equal(query_sine_embed)
 
+            
+            #*===================================1tomany==============================================
+            obj_center_cdecoder = reference_points_cdecoder[..., :self.query_dim]
+            query_sine_embed_cdecoder = gen_sineembed_for_position(obj_center_cdecoder, self.d_model)
+            if layer_id == 0:
+                pos_transformation_cdecoder = 1
+            else:
+                pos_transformation_cdecoder = self.query_scale(output_cdecoder) # [300,bs,256]
+            query_sine_embed_cdecoder = query_sine_embed_cdecoder[...,:self.d_model] * pos_transformation_cdecoder
+            if self.modulate_hw_attn:
+                refHW_cond_cdecoder = self.ref_anchor_head(output_cdecoder).sigmoid()
+                query_sine_embed_cdecoder[..., self.d_model // 2:] *= (refHW_cond_cdecoder[..., 0] / obj_center_cdecoder[..., 2]).unsqueeze(-1)
+                query_sine_embed_cdecoder[..., :self.d_model // 2] *= (refHW_cond_cdecoder[..., 1] / obj_center_cdecoder[..., 3]).unsqueeze(-1)
+            #*===================================1tomany==============================================
+                
+
             #===================================我加的==============================================
             obj_center_sub = reference_points_sub[..., :self.query_dim] #torch.Size([600, bs, 4])
             query_sine_embed_sub = gen_sineembed_for_position(obj_center_sub, self.d_model)
@@ -383,10 +408,11 @@ class TransformerDecoder(nn.Module):
             # output torch.Size([300, bs, 256])
             # output_sub output_obj [600,bs,256]
             # sub_maps obj_maps [bs, 600, 1000]
-            output, output_sub, output_obj, sub_maps, obj_maps = layer( output,
-                                                                        output_sub,
-                                                                        output_obj, 
-                                                                        memory, 
+            output, output_sub, output_obj, sub_maps, obj_maps, output_cdecoder = layer( tgt = output,
+                                                                        tgt_sub = output_sub,
+                                                                        tgt_obj = output_obj,
+                                                                        tgt_cdecoder = output_cdecoder,
+                                                                        memory = memory, 
                                                                         tgt_mask=tgt_mask, #None
                                                                         memory_mask=memory_mask, #None
                                                                         tgt_key_padding_mask=tgt_key_padding_mask, # None
@@ -398,6 +424,7 @@ class TransformerDecoder(nn.Module):
                                                                         query_sine_embed=query_sine_embed,
                                                                         query_sine_embed_sub=query_sine_embed_sub,
                                                                         query_sine_embed_obj=query_sine_embed_obj,
+                                                                        query_sine_embed_cdecoder=query_sine_embed_cdecoder,
                                                                         so_embed = so_embed,
                                                                         is_first=(layer_id == 0))
 
@@ -416,6 +443,16 @@ class TransformerDecoder(nn.Module):
                 #最后一层的new_reference_points 没有添加到ref_points
 
 
+                #*===================================1tomany==============================================
+                tmp_cdecoder = self.bbox_embed(output_cdecoder)
+                tmp_cdecoder[..., :self.query_dim] += inverse_sigmoid(reference_points_cdecoder)
+                new_reference_points_cdecoder = tmp_cdecoder[..., :self.query_dim].sigmoid()
+                if layer_id != self.num_layers - 1:
+                    ref_points_cdecoder.append(new_reference_points_cdecoder)
+                reference_points_cdecoder = new_reference_points_cdecoder.detach()
+                #*===================================1tomany==============================================
+
+
             #===================================我加的==============================================
             #todo 原版DAB的query在做完与memory的ca之后就输出了，然后经过self.bbox_embed变换，但是这里reltr多了一层sub和entity的ca
             #todo 同样可以在后面试试哪种更合适
@@ -426,13 +463,13 @@ class TransformerDecoder(nn.Module):
                 ref_points_sub.append(new_reference_points_sub)
             reference_points_sub = new_reference_points_sub.detach()
 
+
             tmp_obj = self.bbox_embed_obj(output_obj)
             tmp_obj[..., :self.query_dim] += inverse_sigmoid(reference_points_obj)
             new_reference_points_obj = tmp_obj[..., :self.query_dim].sigmoid()
             if layer_id != self.num_layers - 1:
                 ref_points_obj.append(new_reference_points_obj)
             reference_points_obj = new_reference_points_obj.detach()
-
             #===================================我加的==============================================
             
 
@@ -445,11 +482,7 @@ class TransformerDecoder(nn.Module):
                 intermediate_submaps.append(sub_maps)
                 intermediate_objmaps.append(obj_maps)
 
-
-        # intermediate_last = intermediate[-1]
-        # output = self.norm(output)
-        # flag = intermediate_last.equal(output)
-
+                intermediate_cdecoder.append(self.norm(output_cdecoder))
 
 
 
@@ -459,6 +492,10 @@ class TransformerDecoder(nn.Module):
                 intermediate.pop()
                 intermediate.append(output)
 
+            output_cdecoder = self.norm(output_cdecoder)
+            if self.return_intermediate:
+                intermediate_cdecoder.pop()
+                intermediate_cdecoder.append(output_cdecoder)
 
 
         #===================================我加的==============================================
@@ -483,6 +520,8 @@ class TransformerDecoder(nn.Module):
                   "reference_sub":torch.stack(ref_points_sub).transpose(1, 2),
                   "hs_obj":torch.stack(intermediate_output_obj).transpose(1, 2),
                   "reference_obj":torch.stack(ref_points_obj).transpose(1, 2),
+                  "hs_cdecoder":torch.stack(intermediate_cdecoder).transpose(1, 2),
+                  "reference_cdecoder":torch.stack(ref_points_cdecoder).transpose(1, 2),
                 }
 
 
@@ -638,6 +677,7 @@ class TransformerDecoderLayer(nn.Module):
     def forward(self, tgt,
                       tgt_sub,
                       tgt_obj, 
+                      tgt_cdecoder,
                       memory,
                       tgt_mask: Optional[Tensor] = None,
                       memory_mask: Optional[Tensor] = None,
@@ -650,6 +690,7 @@ class TransformerDecoderLayer(nn.Module):
                       query_sine_embed = None,
                       query_sine_embed_sub = None,
                       query_sine_embed_obj = None,
+                      query_sine_embed_cdecoder= None,
                       so_embed = None,
                       is_first = False):
         
@@ -676,6 +717,7 @@ class TransformerDecoderLayer(nn.Module):
 
             tgt = tgt + self.dropout1(tgt2)
             tgt = self.norm1(tgt)
+            tgt_og_input = tgt
 
         # ========== Begin of Cross-Attention =============
         # Apply projections here
@@ -710,7 +752,9 @@ class TransformerDecoderLayer(nn.Module):
         tgt2 = self.cross_attn(    query=q,
                                    key=k,
                                    value=v, attn_mask=memory_mask,
-                                   key_padding_mask=memory_key_padding_mask)[0]               
+                                   key_padding_mask=memory_key_padding_mask)[0] 
+
+        
         # ========== End of Cross-Attention =============
 
         tgt = tgt + self.dropout2(tgt2)
@@ -719,6 +763,34 @@ class TransformerDecoderLayer(nn.Module):
         tgt = tgt + self.dropout3(tgt2)
         tgt = self.norm3(tgt)
         # Part 1 DABDETR end
+
+        #*======================1tomany==============================
+        if is_first:
+            tgt_cdecoder = tgt_og_input 
+        q_content_cdecoder = self.ca_qcontent_proj(tgt_cdecoder)
+        
+        if is_first or self.keep_query_pos:
+            q_content_cdecoder = q_content_cdecoder + q_pos
+        else:
+            q_content_cdecoder = q_content_cdecoder
+    
+        q_content_cdecoder = q_content_cdecoder.view(num_queries, bs, self.nhead, n_model//self.nhead)
+
+        query_sine_embed_cdecoder = self.ca_qpos_sine_proj(query_sine_embed_cdecoder)
+        query_sine_embed_cdecoder = query_sine_embed_cdecoder.view(num_queries, bs, self.nhead, n_model//self.nhead)
+
+        q_content_cdecoder = torch.cat([q_content_cdecoder, query_sine_embed_cdecoder], dim=3).view(num_queries, bs, n_model * 2)
+        tgt2_cdecoder = self.cross_attn(query=q_content_cdecoder,
+                                        key=k,
+                                        value=v, 
+                                        attn_mask=memory_mask,
+                                        key_padding_mask=memory_key_padding_mask)[0]
+        tgt_cdecoder = tgt_cdecoder + self.dropout2(tgt2_cdecoder)
+        tgt_cdecoder = self.norm2(tgt_cdecoder)
+        tgt2_cdecoder = self.linear2(self.dropout(self.activation(self.linear1(tgt_cdecoder))))
+        tgt_cdecoder = tgt_cdecoder + self.dropout3(tgt2_cdecoder)
+        tgt_cdecoder = self.norm3(tgt_cdecoder)
+        #*======================1tomany==============================
 
 
         #===================================我加的==============================================
@@ -929,7 +1001,7 @@ class TransformerDecoderLayer(nn.Module):
         #===================================我加的==============================================
 
         #tgt_triplet = torch.cat((tgt_sub_dea, tgt_obj_dea), dim=-1) #torch.Size([600, bs, 512])
-        return tgt, tgt_sub_dea, tgt_obj_dea, sub_maps, obj_maps
+        return tgt, tgt_sub_dea, tgt_obj_dea, sub_maps, obj_maps, tgt_cdecoder
     
 
 

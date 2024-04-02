@@ -13,7 +13,7 @@ from .dabrel_transformer import build_transformer
 from .matcher import build_matcher
 from .util import box_ops
 from collections import Counter
-
+from .onetomany import Stage1Assigner, Stage2Assigner
 
 def sigmoid_focal_loss(inputs, targets, num_boxes, alpha: float = 0.25, gamma: float = 2, weights=None):
     """
@@ -265,6 +265,15 @@ class DABRelTR(nn.Module):
                 outputs_coords.append(outputs_coord)
             outputs_coord = torch.stack(outputs_coords)
 
+        #*===================================1tomany==============================================
+        hs_cdecoder = result["hs_cdecoder"]
+        reference_cdecoder = result["reference_cdecoder"]
+        reference_before_sigmoid_cdecoder = inverse_sigmoid(reference_cdecoder)
+        tmp_cdecoder = self.bbox_embed(hs_cdecoder)
+        tmp_cdecoder[..., :self.query_dim] += reference_before_sigmoid_cdecoder
+        outputs_coord_cdecoder = tmp_cdecoder.sigmoid()
+        outputs_class_cdecoder = self.class_embed(hs_cdecoder)
+        #*===================================1tomany==============================================
 
 
         #===========================我加的=========================================
@@ -299,44 +308,31 @@ class DABRelTR(nn.Module):
         outputs_class = self.class_embed(hs)  # torch.Size([6, bs, 300, 151])
 
 
-
         out = {'pred_logits': outputs_class[-1], 'pred_boxes': outputs_coord[-1],
                'sub_logits': outputs_class_sub[-1], 'sub_boxes': outputs_coord_sub[-1],
                'obj_logits': outputs_class_obj[-1], 'obj_boxes': outputs_coord_obj[-1],
-               'rel_logits': outputs_class_rel[-1]
+               'rel_logits': outputs_class_rel[-1],
+               "pred_logits_cdecoder":outputs_class_cdecoder[-1],
+               "pred_boxes_cdecoder":outputs_coord_cdecoder[-1],
                }
-
-
-    #     if self.aux_loss:      #默认使用
-    #         out['aux_outputs'] = self._set_aux_loss(outputs_class, outputs_coord)
-    #     # return out
-    # #=============================DAB================================================
-
-    # #=============================REL================================================
-
-
-    #     outputs_class_rel = self.rel_class_embed(torch.cat((hs_sub, hs_obj, so_masks), dim=-1)) # torch.Size([6, bs, 200, 52])
-
-    #     out = {'pred_logits': outputs_class[-1], 'pred_boxes': outputs_coord[-1],
-    #            'sub_logits': outputs_class_sub[-1], 'sub_boxes': outputs_coord_sub[-1],
-    #            'obj_logits': outputs_class_obj[-1], 'obj_boxes': outputs_coord_obj[-1],
-    #            'rel_logits': outputs_class_rel[-1]}
+        
         if self.aux_loss:
             out['aux_outputs'] = self._set_aux_loss(outputs_class, outputs_coord, outputs_class_sub, outputs_coord_sub,
-                                                    outputs_class_obj, outputs_coord_obj, outputs_class_rel)
+                                                    outputs_class_obj, outputs_coord_obj, outputs_class_rel,outputs_class_cdecoder,
+                                                    outputs_coord_cdecoder)
         return out
 
     @torch.jit.unused
     def _set_aux_loss(self, outputs_class, outputs_coord, outputs_class_sub, outputs_coord_sub,
-                      outputs_class_obj, outputs_coord_obj, outputs_class_rel):
+                      outputs_class_obj, outputs_coord_obj, outputs_class_rel,outputs_class_cdecoder,outputs_coord_cdecoder):
         # this is a workaround to make torchscript happy, as torchscript
         # doesn't support dictionary with non-homogeneous values, such
         # as a dict having both a Tensor and a list.
         return [{'pred_logits': a, 'pred_boxes': b, 'sub_logits': c, 'sub_boxes': d, 'obj_logits': e, 'obj_boxes': f,
-                 'rel_logits': g}
-                for a, b, c, d, e, f, g in zip(outputs_class[:-1], outputs_coord[:-1], outputs_class_sub[:-1],
+                 'rel_logits': g, "pred_logits_cdecoder": h, "pred_boxes_cdecoder": i,}
+                for a, b, c, d, e, f, g, h, i in zip(outputs_class[:-1], outputs_coord[:-1], outputs_class_sub[:-1],
                                                outputs_coord_sub[:-1], outputs_class_obj[:-1], outputs_coord_obj[:-1],
-                                               outputs_class_rel[:-1])]
+                                               outputs_class_rel[:-1], outputs_class_cdecoder[:-1],outputs_coord_cdecoder[:-1])]
     
     #=============================REL================================================
 
@@ -351,33 +347,30 @@ class SetCriterion(nn.Module):
         self.weight_dict = weight_dict      
         self.losses = losses
         self.loss_weight = loss_weight
-
         #? DAB
         self.focal_alpha = focal_alpha
-
-        #! rel
-        # self.eos_coef = eos_coef 
-        # empty_weight = torch.ones(self.num_classes + 1) # torch.Size([152]) 
-        # empty_weight[-1] = self.eos_coef
-        # self.register_buffer('empty_weight', empty_weight)
-
         self.num_rel_classes = 51 if num_classes == 151 else 31 # Using entity class numbers to adapt rel class numbers
-        # empty_weight_rel = torch.ones(num_rel_classes+1)
-        # empty_weight_rel[-1] = self.eos_coef
-        # self.register_buffer('empty_weight_rel', empty_weight_rel)
-        #! rel
 
-    def loss_labels(self, outputs, targets, indices, num_boxes, log=True):
+        num_queries = 300                      
+        self.one2many = Stage2Assigner(num_queries)  #* 不知道这个300是怎么设置的，可以问问
+
+    def loss_labels(self, outputs, targets, indices, num_boxes, log=True, one2many=False):
             """Entity/subject/object Classification loss with focal loss"""
-            assert 'pred_logits' in outputs
+            
+            if one2many:
+                assert "pred_logits_cdecoder" in outputs
+                src_logits = outputs["pred_logits_cdecoder"]
+            else:
+                assert "pred_logits" in outputs
+                src_logits = outputs["pred_logits"]
 
             # Entity logits and their indices
-            pred_logits = outputs['pred_logits']
+
             idx = self._get_src_permutation_idx(indices[0]) 
             target_classes_o = torch.cat([t["labels"][J] for t, (_, J) in zip(targets, indices[0])])
 
             # Prepare target classes for entities
-            target_classes = torch.full(pred_logits.shape[:2], self.num_classes, dtype=torch.int64, device=pred_logits.device)
+            target_classes = torch.full(src_logits.shape[:2], self.num_classes, dtype=torch.int64, device=src_logits.device)
             target_classes[idx] = target_classes_o
 
             # Subject and Object logits
@@ -395,7 +388,7 @@ class SetCriterion(nn.Module):
 
             # Concatenate all targets and logits
             target_classes = torch.cat((target_classes, target_sub_classes, target_obj_classes), dim=1)  # [bs, 1500]
-            src_logits = torch.cat((pred_logits, sub_logits, obj_logits), dim=1)  # [bs, 1500, 151]
+            src_logits = torch.cat((src_logits, sub_logits, obj_logits), dim=1)  # [bs, 1500, 151]
 
             # One-hot encode targets for focal loss
             target_classes_onehot = torch.zeros([src_logits.shape[0], src_logits.shape[1], src_logits.shape[2]+1],
@@ -404,90 +397,53 @@ class SetCriterion(nn.Module):
             target_classes_onehot = target_classes_onehot[:, :, :-1]  # Remove the 'no object' class
 
 
-            # Compute the focal loss
-            #
+            loss_ce = sigmoid_focal_loss(src_logits, target_classes_onehot, num_boxes, alpha=self.focal_alpha, gamma=2) * src_logits.shape[1]
 
-            all_loss_weight = None
-            if self.loss_weight:
-                all_loss_weight = torch.cat((torch.ones(pred_logits.shape[:2]).to(pred_logits.device), indices[2]*0.5, indices[3]*0.5), dim=-1)
-            loss_ce = sigmoid_focal_loss(src_logits, target_classes_onehot, num_boxes, alpha=self.focal_alpha, gamma=2, weights=all_loss_weight) * src_logits.shape[1]
-
-            #TODO Weight the loss if necessary
-            #! 先不加原版rel的weight了
-            # Adjust these weights based on your requirements
-            # loss_weight = torch.cat((torch.ones(pred_logits.shape[:2]), indices[2]*0.5, indices[3]*0.5), dim=-1).to(pred_logits.device)
-            # losses = {'loss_ce': (loss_ce * loss_weight).sum() / num_boxes}
 
             losses = {'loss_ce': loss_ce}
             # Calculate classification errors (optional)
             if log:
-                losses['class_error'] = 100 - accuracy(pred_logits[idx], target_classes_o)[0]
+                losses['class_error'] = 100 - accuracy(src_logits[idx], target_classes_o)[0]
                 losses['sub_error'] = 100 - accuracy(sub_logits[rel_idx], target_rels_classes_o)[0]
                 losses['obj_error'] = 100 - accuracy(obj_logits[rel_idx], target_relo_classes_o)[0]
 
             return losses
-    # def loss_labels(self, outputs, targets, indices, num_boxes, log=True):
-    #     assert 'pred_logits' in outputs
 
-    #     #* Part1 entity loss
-    #     pred_logits = outputs['pred_logits'] #torch.Size([bs, 300, 151])
-    #     idx = self._get_src_permutation_idx(indices[0]) 
-    #     target_classes_o = torch.cat([t["labels"][J] for t, (_, J) in zip(targets, indices[0])])
-    #     target_classes = torch.full(pred_logits.shape[:2], self.num_classes, dtype=torch.int64, device=pred_logits.device)
-    #     target_classes[idx] = target_classes_o
+    def loss_labels_one2many(self, outputs, targets, indices, num_boxes, log=True):
+            """Entity/subject/object Classification loss with focal loss"""
+            
+            assert "pred_logits_cdecoder" in outputs
+            src_logits = outputs["pred_logits_cdecoder"]
 
-    #     target_classes_onehot = torch.zeros([pred_logits.shape[0], pred_logits.shape[1], pred_logits.shape[2]+1],
-    #                                         dtype=pred_logits.dtype, layout=pred_logits.layout, device=pred_logits.device)
-    #     target_classes_onehot.scatter_(2, target_classes.unsqueeze(-1), 1) # torch.Size([bs, 300, 152])
-    #     #target_classes_onehot = target_classes_onehot[:,:,:-1] # 切掉最后一个1，这样就变成了全0向量代表no obj
+            # Entity logits and their indices
 
-    #    #* Part2 sub and obj loss
-    #     sub_logits = outputs['sub_logits'] #torch.Size([bs, 600, 151])
-    #     obj_logits = outputs['obj_logits'] #torch.Size([bs, 600, 151])
+            idx = self._get_src_permutation_idx(indices) 
+            target_classes_o = torch.cat([t["labels"][J] for t, (_, J) in zip(targets, indices)])
 
-    #     rel_idx = self._get_src_permutation_idx(indices[1])
-    #     target_rel_sub_classes_o = torch.cat([t["labels"][t["rel_annotations"][J, 0]] for t, (_, J) in zip(targets, indices[1])])
-    #     target_rel_obj_classes_o = torch.cat([t["labels"][t["rel_annotations"][J, 1]] for t, (_, J) in zip(targets, indices[1])])
-    #     target_sub_classes = torch.full(sub_logits.shape[:2], self.num_classes, dtype=torch.int64, device=sub_logits.device)
-    #     target_obj_classes = torch.full(obj_logits.shape[:2], self.num_classes, dtype=torch.int64, device=obj_logits.device)
-    #     target_sub_classes[rel_idx] = target_rel_sub_classes_o
-    #     target_obj_classes[rel_idx] = target_rel_obj_classes_o
-
-    #     target_sub_classes_onehot = torch.zeros([sub_logits.shape[0], sub_logits.shape[1], sub_logits.shape[2]+1],
-    #                                              dtype=sub_logits.dtype, layout=sub_logits.layout, device=sub_logits.device)
-    #     target_obj_classes_onehot = torch.zeros([obj_logits.shape[0], obj_logits.shape[1], obj_logits.shape[2]+1],
-    #                                              dtype=obj_logits.dtype, layout=obj_logits.layout, device=obj_logits.device)
-        
-    #     target_sub_classes_onehot.scatter_(2, target_sub_classes.unsqueeze(-1), 1)
-    #     target_obj_classes_onehot.scatter_(2, target_obj_classes.unsqueeze(-1), 1)
+            # Prepare target classes for entities
+            target_classes = torch.full(src_logits.shape[:2], self.num_classes, dtype=torch.int64, device=src_logits.device)
+            target_classes[idx] = target_classes_o
 
 
-    #     target_classes_onehot1 = torch.cat((target_classes_onehot, target_sub_classes_onehot, target_obj_classes_onehot), dim=1)
-    #     target_classes_onehot1 = target_classes_onehot1[:, :, :-1]
+            # Concatenate all targets and logits
+            target_classes = target_classes
+            src_logits = src_logits
 
-    #     target_classes_all = torch.cat((target_classes, target_sub_classes, target_obj_classes), dim=1)  # [bs, 500]
-    #     src_logits_all = torch.cat((pred_logits, sub_logits, obj_logits), dim=1)  # [bs, 500, 152]
+            # One-hot encode targets for focal loss
+            target_classes_onehot = torch.zeros([src_logits.shape[0], src_logits.shape[1], src_logits.shape[2]+1],
+                                            dtype=src_logits.dtype, layout=src_logits.layout, device=src_logits.device)
+            target_classes_onehot.scatter_(2, target_classes.unsqueeze(-1), 1)
+            target_classes_onehot = target_classes_onehot[:, :, :-1]  # Remove the 'no object' class
 
+            loss_ce = sigmoid_focal_loss(src_logits, target_classes_onehot, num_boxes, alpha=self.focal_alpha, gamma=2) * src_logits.shape[1]
 
-    #     target_classes_onehot = torch.zeros_like(src_logits_all).scatter_(2, target_classes_all.unsqueeze(-1), 1)
-    #     target_classes_onehot = target_classes_onehot[:, :, :-1] 
+            losses = {'loss_ce_one2many': loss_ce}
+            # Calculate classification errors (optional)
+            if log:
+                losses['class_error'] = 100 - accuracy(src_logits[idx], target_classes_o)[0]
 
-    #     flag =  target_classes_onehot1.equal(target_classes_onehot)
-
-    #     loss_ce = sigmoid_focal_loss(src_logits_all, target_classes_onehot, num_boxes, alpha=self.focal_alpha, gamma=2) * src_logits_all.shape[1]
-
-    #     # TODO Rel这里有个weight  这个weight是从matcher里面产生的，
-    #     #loss_weight = torch.cat((torch.ones(pred_logits.shape[:2]).to(pred_logits.device), indices[2]*0.5, indices[3]*0.5), dim=-1)
-    #     #losses = {'loss_ce': (loss_ce * loss_weight).sum()/self.empty_weight[target_classes].sum()}
-
-    #     losses = {'loss_ce': loss_ce}
-
-    #     if log:
-    #         losses['class_error'] = 100 - accuracy(pred_logits[idx], target_classes_o)[0]
-    #         losses['sub_error'] = 100 - accuracy(sub_logits[rel_idx], target_rel_sub_classes_o)[0]
-    #         losses['obj_error'] = 100 - accuracy(obj_logits[rel_idx], target_rel_obj_classes_o)[0]
-    #     return losses
-
+            return losses
+   
 
 
     def loss_relations(self, outputs, targets, indices, num_boxes, log=True):
@@ -500,6 +456,8 @@ class SetCriterion(nn.Module):
         target_classes_o = torch.cat([t["rel_annotations"][J,2] for t, (_, J) in zip(targets, indices[1])])
         target_classes = torch.full(src_logits.shape[:2], self.num_rel_classes, dtype=torch.int64, device=src_logits.device)
         target_classes[idx] = target_classes_o
+
+
 
         target_classes_onehot = torch.zeros([src_logits.shape[0], src_logits.shape[1], src_logits.shape[2]+1],
                                              dtype=src_logits.dtype, layout=src_logits.layout, device=src_logits.device)
@@ -562,6 +520,29 @@ class SetCriterion(nn.Module):
             box_ops.box_cxcywh_to_xyxy(target_boxes)))
         losses['loss_giou'] = loss_giou.sum() / num_boxes
         return losses
+
+    def loss_boxes_one2many(self, outputs, targets, indices, num_boxes):
+        """Compute the losses related to the entity/subject/object bounding boxes, the L1 regression loss and the GIoU loss
+           targets dicts must contain the key "boxes" containing a tensor of dim [nb_target_boxes, 4]
+           The target boxes are expected in format (center_x, center_y, w, h), normalized by the image size.
+        """
+        assert 'pred_boxes_cdecoder' in outputs
+        idx = self._get_src_permutation_idx(indices)
+        pred_boxes = outputs['pred_boxes_cdecoder'][idx]
+        target_entry_boxes = torch.cat([t['boxes'][i] for t, (_, i) in zip(targets, indices)], dim=0)
+
+        src_boxes = pred_boxes
+        target_boxes = target_entry_boxes
+        loss_bbox = F.l1_loss(src_boxes, target_boxes, reduction='none')
+
+        losses = {}
+        losses['loss_bbox_one2many'] = loss_bbox.sum() / num_boxes
+
+        loss_giou = 1 - torch.diag(box_ops.generalized_box_iou(
+            box_ops.box_cxcywh_to_xyxy(src_boxes),
+            box_ops.box_cxcywh_to_xyxy(target_boxes)))
+        losses['loss_giou_one2many'] = loss_giou.sum() / num_boxes
+        return losses
     
     def _get_src_permutation_idx(self, indices):
         batch_idx = torch.cat([torch.full_like(src, i) for i, (src, _) in enumerate(indices)])
@@ -590,21 +571,30 @@ class SetCriterion(nn.Module):
     def forward(self, outputs, targets):
         outputs_without_aux = {k: v for k, v in outputs.items() if k != 'aux_outputs'}
         indices = self.matcher(outputs_without_aux, targets)
-        self.indices = indices
+        self.indices = indices 
         num_boxes = sum(len(t["labels"])+len(t["rel_annotations"]) for t in targets) #78=47+31
         num_boxes = torch.as_tensor([num_boxes], dtype=torch.float, device=next(iter(outputs.values())).device)
         if is_dist_avail_and_initialized():
             torch.distributed.all_reduce(num_boxes)
         num_boxes = torch.clamp(num_boxes / get_world_size(), min=1).item()
-
+        
+        #*======================1tomany=================================
+        indices_one2many = self.one2many(outputs_without_aux, targets)
+        num_boxes_balance = num_boxes*3
+        
         losses = {}
         for loss in self.losses:
             losses.update(self.get_loss(loss, outputs, targets, indices, num_boxes))
+        losses_one2many = self.loss_labels_one2many(outputs, targets, indices_one2many, num_boxes_balance)
+        losses_one2many.update(self.loss_boxes_one2many(outputs, targets, indices_one2many, num_boxes_balance))
+        losses.update(losses_one2many)
+        #*======================1tomany=================================
 
         
         if 'aux_outputs' in outputs:
             for i, aux_outputs in enumerate(outputs['aux_outputs']):
                 indices = self.matcher(aux_outputs, targets)
+                indices_one2many = self.one2many(aux_outputs, targets)
                 for loss in self.losses:
                     kwargs = {}
                     if loss == 'labels' or loss == 'relations':
@@ -613,7 +603,10 @@ class SetCriterion(nn.Module):
                     l_dict = self.get_loss(loss, aux_outputs, targets, indices, num_boxes, **kwargs)
                     l_dict = {k + f'_{i}': v for k, v in l_dict.items()}
                     losses.update(l_dict)
-
+                losses_one2many = self.loss_labels_one2many(aux_outputs, targets, indices_one2many, num_boxes_balance)
+                losses_one2many.update(self.loss_boxes_one2many(aux_outputs, targets, indices_one2many, num_boxes_balance))
+                losses_one2many = {k + f"_{i}": v for k, v in losses_one2many.items()}
+                losses.update(losses_one2many)
         return losses
 
 
@@ -759,6 +752,9 @@ def build_DABRelTR(args):
     weight_dict = {'loss_ce': args.cls_loss_coef, 'loss_bbox': args.bbox_loss_coef}
     weight_dict['loss_giou'] = args.giou_loss_coef
     weight_dict['loss_rel'] = args.rel_loss_coef
+    weight_dict['loss_ce_one2many'] = args.cls_loss_coef
+    weight_dict['loss_bbox_one2many'] = args.bbox_loss_coef
+    weight_dict['loss_giou_one2many'] = args.giou_loss_coef
 
 
     # TODO this is a hack

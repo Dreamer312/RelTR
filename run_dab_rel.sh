@@ -980,16 +980,40 @@
 
 #rel 2 * cost_rel_class   试试rel 2的结果
 #====================================================================
-torchrun --nproc_per_node=2 \
+# torchrun --nproc_per_node=2 \
+#          --standalone \
+#          --nnodes=1 \
+#          cmh_dab_rel_main.py \
+#             --dataset vg \
+#             --img_folder /home/minghach/Data/cmh/RelTR/data/vg/images/ \
+#             --ann_path /home/minghach/Data/cmh/RelTR/data/vg/ \
+#             --modelname dab_detr \
+#             --batch_size=8 \
+#             --output_dir ./checkpoint_dab_rel_wdb108 \
+#             --epochs 50 \
+#             --lr_drop 40 \
+#             --random_refpoints_xy \
+#             --dropout=0.1 \
+#             --num_entities=200 \
+#             --num_triplets=300 \
+#             --num_select=200 \
+#             --set_cost_class=2 \
+#             --set_cost_class_dab=2 \
+#====================================================================
+
+
+
+export CUDA_VISIBLE_DEVICES=0,1,2,3
+torchrun --nproc_per_node=4 \
          --standalone \
          --nnodes=1 \
          cmh_dab_rel_main.py \
             --dataset vg \
-            --img_folder /home/minghach/Data/cmh/RelTR/data/vg/images/ \
-            --ann_path /home/minghach/Data/cmh/RelTR/data/vg/ \
+            --img_folder "/data1/cmh/Datasets/VisualGenome/vg/images/" \
+            --ann_path "/data1/cmh/Datasets/VisualGenome/vg/" \
             --modelname dab_detr \
-            --batch_size=8 \
-            --output_dir ./checkpoint_dab_rel_wdb108 \
+            --batch_size=4 \
+            --output_dir ./wdb192_one2many_1 \
             --epochs 50 \
             --lr_drop 40 \
             --random_refpoints_xy \
@@ -999,4 +1023,3 @@ torchrun --nproc_per_node=2 \
             --num_select=200 \
             --set_cost_class=2 \
             --set_cost_class_dab=2 \
-#====================================================================
