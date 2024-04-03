@@ -182,12 +182,12 @@ def subsample_labels(
         pos_idx, neg_idx (Tensor):
             1D vector of indices. The total length of both is `num_samples` or fewer.
     """
-    positive = nonzero_tuple((labels != -1) & (labels != bg_label))[0] # 17
-    negative = nonzero_tuple(labels == bg_label)[0] # 883
+    positive = nonzero_tuple((labels != -1) & (labels != bg_label))[0] 
+    negative = nonzero_tuple(labels == bg_label)[0] 
 
-    num_pos = int(num_samples * positive_fraction) # 75
+    num_pos = int(num_samples * positive_fraction) 
     # protect against not enough positive examples
-    num_pos = min(positive.numel(), num_pos) # 17
+    num_pos = min(positive.numel(), num_pos) 
     num_neg = num_samples - num_pos # 283
     # protect against not enough negative examples
     num_neg = min(negative.numel(), num_neg) # 283
@@ -311,64 +311,120 @@ class Stage2Assigner(nn.Module):
         return sample_topk(pr_inds, gt_inds, iou, self.k)
 
 
-# modified from https://github.com/facebookresearch/detectron2/blob/cbbc1ce26473cb2a5cc8f58e8ada9ae14cb41052/detectron2/modeling/proposal_generator/rpn.py#L181
-class Stage1Assigner(nn.Module):
-    def __init__(self, t_low=0.3, t_high=0.7, max_k=4):
+class Stage2AssignerRel(nn.Module):
+    def __init__(self, num_queries, max_k=6):
         super().__init__()
-        self.positive_fraction = 0.5
-        self.batch_size_per_image = 256
+        self.positive_fraction = 0.25
+        self.bg_label = 400  # number > 91 to filter out later
+        self.batch_size_per_image = num_queries
+        self.proposal_matcher = Matcher(thresholds=[0.4], labels=[0, 1], allow_low_quality_matches=True)
         self.k = max_k
-        self.t_low = t_low
-        self.t_high = t_high
-        self.anchor_matcher = Matcher(thresholds=[t_low, t_high], labels=[0, -1, 1], allow_low_quality_matches=True)
 
-    def _subsample_labels(self, label):
+    def _sample_proposals(
+            self, matched_idxs: torch.Tensor, matched_labels: torch.Tensor, gt_classes: torch.Tensor
+    ):
         """
-        Randomly sample a subset of positive and negative examples, and overwrite
-        the label vector to the ignore value (-1) for all elements that are not
-        included in the sample.
+        Based on the matching between N proposals and M groundtruth,
+        sample the proposals and set their classification labels.
 
         Args:
-            labels (Tensor): a vector of -1, 0, 1. Will be modified in-place and returned.
+            matched_idxs (Tensor): a vector of length N, each is the best-matched
+                gt index in [0, M) for each proposal.
+            matched_labels (Tensor): a vector of length N, the matcher's label
+                (one of cfg.MODEL.ROI_HEADS.IOU_LABELS) for each proposal.
+            gt_classes (Tensor): a vector of length M.
+
+        Returns:
+            Tensor: a vector of indices of sampled proposals. Each is in [0, N).
+            Tensor: a vector of the same length, the classification label for
+                each sampled proposal. Each sample is labeled as either a category in
+                [0, num_classes) or the background (num_classes).
         """
-        pos_idx, neg_idx = subsample_labels(
-            label, self.batch_size_per_image, self.positive_fraction, 0
+        has_gt = gt_classes.numel() > 0
+        # Get the corresponding GT for each proposal
+        if has_gt:
+            gt_classes = gt_classes[matched_idxs] # 300
+            # Label unmatched proposals (0 label from matcher) as background (label=num_classes)
+            gt_classes[matched_labels == 0] = self.bg_label   # 这里400  只要不是数据集里面的类别数，随便设置一个代表背景
+            # Label ignore proposals (-1 label)
+            gt_classes[matched_labels == -1] = -1
+        else:
+            gt_classes = torch.zeros_like(matched_idxs) + self.bg_label
+        sampled_fg_idxs, sampled_bg_idxs = subsample_labels(
+            gt_classes, self.batch_size_per_image, self.positive_fraction, self.bg_label
         )
-        # Fill with the ignore label (-1), then set positive and negative labels
-        label.fill_(-1)
-        label.scatter_(0, pos_idx, 1)
-        label.scatter_(0, neg_idx, 0)
-        return label
 
-    def forward(self, outputs, targets):
-        bs = len(targets)
+        sampled_idxs = torch.cat([sampled_fg_idxs, sampled_bg_idxs], dim=0)
+        return sampled_idxs, gt_classes[sampled_idxs]
+
+    @torch.no_grad()
+    def get_cost_matrix_rel(self, pred_logits_sub, pred_logits_obj, pred_boxes_sub, pred_boxes_obj, gt_boxes_sub, gt_boxes_obj, gt_classes_sub, gt_classes_obj, gt_rel):
+        num_queries = len(pred_logits_sub) # 300
+
+        out_prob_sub = pred_logits_sub.sigmoid() # [300,151]
+        out_bbox_sub = pred_boxes_sub  # [300,4]
+        out_prob_obj = pred_logits_obj.sigmoid() 
+        out_bbox_obj = pred_boxes_obj
+
+        cost_box_sub = box_iou(box_cxcywh_to_xyxy(out_bbox_sub), box_cxcywh_to_xyxy(gt_boxes_sub))[0] # [300,num_gt]
+        cost_class_sub = out_prob_sub[:, gt_classes_sub]  # [300,num_gt]
+
+        cost_box_obj = box_iou(box_cxcywh_to_xyxy(out_bbox_obj), box_cxcywh_to_xyxy(gt_boxes_obj))[0] 
+        cost_class_obj = out_prob_obj[:, gt_classes_obj] 
+
+        C_sub = 0.7 * cost_box_sub + 0.3 * cost_class_sub
+        C_obj = 0.7 * cost_box_obj + 0.3 * cost_class_obj
+        C = (C_sub+C_obj)/2.0
+        C = C.view(num_queries, -1) 
+        return C.T
+
+    def forward(self, outputs, targets, return_cost_matrix=False):
+        # COCO categories are from 1 to 90. They set num_classes=91 and apply sigmoid.
+        bs = len(targets) # 2
         indices = []
+        cost_matrices = []
         for b in range(bs):
-            anchors = outputs['anchors'][b]
-            if len(targets[b]['boxes']) == 0:
-                indices.append((torch.tensor([], dtype=torch.long, device=anchors.device),
-                                torch.tensor([], dtype=torch.long, device=anchors.device)))
-                continue
-            iou, _ = box_iou(
-                box_cxcywh_to_xyxy(targets[b]['boxes']),
-                box_cxcywh_to_xyxy(anchors),
-            )
-            matched_idxs, matched_labels = self.anchor_matcher(
-                iou)  # proposal_id -> highest_iou_gt_id, proposal_id -> [1 if iou > 0.7, 0 if iou < 0.3, -1 ow]
-            matched_labels = self._subsample_labels(matched_labels)
+            sub_inds = targets[b]['rel_annotations'][:, 0]
+            obj_inds = targets[b]['rel_annotations'][:, 1]
+            gt_boxes_sub = targets[b]['boxes'][sub_inds]
+            gt_boxes_obj = targets[b]['boxes'][obj_inds]
+            gt_classes_sub = targets[b]['labels'][sub_inds]
+            gt_classes_obj = targets[b]['labels'][obj_inds]
+            gt_rel = targets[b]['rel_annotations'][:, 2]
 
-            all_pr_inds = torch.arange(len(anchors))
-            pos_pr_inds = all_pr_inds[matched_labels == 1]
-            pos_gt_inds = matched_idxs[pos_pr_inds]
-            pos_ious = iou[pos_gt_inds, pos_pr_inds]
-            # pos_pr_inds, pos_gt_inds = self.postprocess_indices(pos_pr_inds, pos_gt_inds, iou)
-            pos_pr_inds, pos_gt_inds = pos_pr_inds.to(anchors.device), pos_gt_inds.to(anchors.device)
+            pred_logits_sub = outputs['sub_logits_cdecoder'][b].detach()  # 300 151
+            pred_logits_obj = outputs['obj_logits_cdecoder'][b].detach()  # 300 151
+
+            pred_boxes_sub = outputs['sub_boxes'][b] # 300 151
+            pred_boxes_obj = outputs['obj_boxes'][b] # 300 151
+
+            cost_matrix = self.get_cost_matrix_rel( pred_logits_sub=pred_logits_sub, 
+                                                    pred_logits_obj=pred_logits_obj, 
+                                                    pred_boxes_sub=pred_boxes_sub, 
+                                                    pred_boxes_obj=pred_boxes_obj, 
+                                                    gt_boxes_sub=gt_boxes_sub, 
+                                                    gt_boxes_obj=gt_boxes_obj, 
+                                                    gt_classes_sub=gt_classes_sub, 
+                                                    gt_classes_obj=gt_classes_obj, 
+                                                    gt_rel=gt_rel)
+            
+            matched_idxs, matched_labels = self.proposal_matcher(cost_matrix)
+
+
+
+            sampled_idxs, sampled_gt_classes = self._sample_proposals(
+                matched_idxs, matched_labels, gt_rel
+            )
+
+            pos_pr_inds = sampled_idxs[sampled_gt_classes != self.bg_label] 
+            pos_gt_inds = matched_idxs[pos_pr_inds] 
+            pos_pr_inds, pos_gt_inds = self.postprocess_indices(pos_pr_inds, pos_gt_inds, cost_matrix) 
             indices.append((pos_pr_inds, pos_gt_inds))
+            cost_matrices.append(cost_matrix)
+
+        if return_cost_matrix:
+            return indices, cost_matrices
         return indices
 
     def postprocess_indices(self, pr_inds, gt_inds, iou):
         return sample_topk(pr_inds, gt_inds, iou, self.k)
-
-
-class FCOSAssigner(nn.Module):
-    pass

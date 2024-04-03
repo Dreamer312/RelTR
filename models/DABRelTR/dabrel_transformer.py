@@ -8,6 +8,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn, Tensor
 from .DAB_MHA import MultiheadAttention
+import torch.utils.checkpoint as checkpoint
 
 class MLP(nn.Module):
     """ Very simple multi-layer perceptron (also called FFN)"""
@@ -154,7 +155,7 @@ class Transformer(nn.Module):
 
         # hs torch.Size([6, bs, 300, 256]) 6应该是6层
         # references torch.Size([6, bs, 300, 4])
-        result, sub_maps, obj_maps= self.decoder(   tgt,
+        result, sub_maps, obj_maps, sub_maps_cdecoder, obj_maps_cdecoder= self.decoder(   tgt,
                                                     tgt_triplets,  
                                                     memory, 
                                                     memory_key_padding_mask=mask,
@@ -166,9 +167,12 @@ class Transformer(nn.Module):
         so_masks = torch.cat((sub_maps.reshape(sub_maps.shape[0], bs, sub_maps.shape[2], 1, h, w),
                               obj_maps.reshape(obj_maps.shape[0], bs, obj_maps.shape[2], 1, h, w)), dim=3)
         
+        so_masks_cdecoder = torch.cat((sub_maps_cdecoder.reshape(sub_maps_cdecoder.shape[0], bs, sub_maps_cdecoder.shape[2], 1, h, w),
+                                        obj_maps_cdecoder.reshape(obj_maps_cdecoder.shape[0], bs, obj_maps_cdecoder.shape[2], 1, h, w)), dim=3)
+        
 
         result["so_masks"] = so_masks
-        
+        result["so_masks_cdecoder"] = so_masks_cdecoder
         return result
 
 
@@ -190,9 +194,9 @@ class TransformerEncoder(nn.Module):
         for layer_id, layer in enumerate(self.layers):
             # rescale the content and pos sim
             pos_scales = self.query_scale(output) # torch.Size([1000, bs, 256])
-            output = layer(output, src_mask=mask,
-                           src_key_padding_mask=src_key_padding_mask, pos=pos*pos_scales)
-
+            # output = layer(output, src_mask=mask,
+            #                src_key_padding_mask=src_key_padding_mask, pos=pos*pos_scales)
+            output = checkpoint.checkpoint(layer, output, mask, src_key_padding_mask, pos*pos_scales)
         if self.norm is not None:
             output = self.norm(output)
 
@@ -212,6 +216,10 @@ class TransformerDecoder(nn.Module):
         self.layers = _get_clones(decoder_layer, num_layers)
         self.num_layers = num_layers
         self.norm = norm
+
+
+
+        self.rel_one2many = True
 
         self.return_intermediate = return_intermediate
         assert return_intermediate
@@ -299,7 +307,7 @@ class TransformerDecoder(nn.Module):
         intermediate_objmaps = []
         #===================================我加的==============================================
 
-        output = tgt
+        
         intermediate = []
         reference_points = refpoints_unsigmoid.sigmoid() # torch.Size([300, bs, 4])
         ref_points = [reference_points]
@@ -310,6 +318,21 @@ class TransformerDecoder(nn.Module):
         intermediate_cdecoder = []
         reference_points_cdecoder = reference_points      
         ref_points_cdecoder = [reference_points_cdecoder]
+
+
+        if self.rel_one2many:
+            output_sub_cdecoder = output_sub
+            intermediate_sub_cdecoder = []
+            reference_points_sub_cdecoder = reference_points_sub
+            ref_points_sub_cdecoder = [reference_points_sub_cdecoder]
+            intermediate_submaps_cdecoder = []
+
+            output_obj_cdecoder = output_obj
+            intermediate_obj_cdecoder = []
+            reference_points_obj_cdecoder = reference_points_obj
+            ref_points_obj_cdecoder = [reference_points_obj_cdecoder]
+            intermediate_objmaps_cdecoder = []
+
         #*===================================1tomany==============================================
 
    
@@ -336,24 +359,11 @@ class TransformerDecoder(nn.Module):
             # modulated HW attentions
             if self.modulate_hw_attn:
                 # 基于当前层的 output 生成 x, y 坐标的调制参数(向量)，对应于 paper 公式中的 w_{q,ref} & h_{q,ref}
-                refHW_cond = self.ref_anchor_head(output).sigmoid() # nq, bs, 2 torch.Size([300, bs, 2])
-
-                # ref_w = refHW_cond[..., 0] #torch.Size([300, bs])  
-                # ref_h = refHW_cond[..., 1] #torch.Size([300, bs])  
-
-                # anchor_w = obj_center[..., 2] #torch.Size([300, bs])  
-                # anchor_h = obj_center[..., 3] #torch.Size([300, bs])  
-
-                # factor_x = (ref_w/anchor_w).unsqueeze(-1)
-                # query_sine_embed2[..., self.d_model // 2:] *= factor_x
-                # factor_y = (ref_h/anchor_h).unsqueeze(-1)
-                # query_sine_embed2[..., :self.d_model // 2] *= factor_y
-                
-                
+                refHW_cond = self.ref_anchor_head(output).sigmoid() # nq, bs, 2 torch.Size([300, bs, 2])                
                 query_sine_embed[..., self.d_model // 2:] *= (refHW_cond[..., 0] / obj_center[..., 2]).unsqueeze(-1) # x
                 query_sine_embed[..., :self.d_model // 2] *= (refHW_cond[..., 1] / obj_center[..., 3]).unsqueeze(-1) # y
 
-                # a = query_sine_embed2.equal(query_sine_embed)
+
 
             
             #*===================================1tomany==============================================
@@ -368,6 +378,35 @@ class TransformerDecoder(nn.Module):
                 refHW_cond_cdecoder = self.ref_anchor_head(output_cdecoder).sigmoid()
                 query_sine_embed_cdecoder[..., self.d_model // 2:] *= (refHW_cond_cdecoder[..., 0] / obj_center_cdecoder[..., 2]).unsqueeze(-1)
                 query_sine_embed_cdecoder[..., :self.d_model // 2] *= (refHW_cond_cdecoder[..., 1] / obj_center_cdecoder[..., 3]).unsqueeze(-1)
+
+
+            if self.rel_one2many:
+                sub_center_cdecoder = reference_points_sub_cdecoder[..., :self.query_dim]
+                query_sine_embed_sub_cdecoder = gen_sineembed_for_position(sub_center_cdecoder, self.d_model)
+                if layer_id == 0:
+                    pos_transformation_sub_cdecoder = 1
+                else:
+                    pos_transformation_sub_cdecoder = self.query_scale_sub(output_sub_cdecoder)
+                query_sine_embed_sub_cdecoder = query_sine_embed_sub_cdecoder[...,:self.d_model] * pos_transformation_sub_cdecoder
+                if self.modulate_hw_attn:
+                    refHW_cond_sub_cdecoder = self.ref_anchor_head_sub(output_sub_cdecoder).sigmoid()
+                    query_sine_embed_sub_cdecoder[..., self.d_model // 2:] *= (refHW_cond_sub_cdecoder[..., 0] / sub_center_cdecoder[..., 2]).unsqueeze(-1)
+                    query_sine_embed_sub_cdecoder[..., :self.d_model // 2] *= (refHW_cond_sub_cdecoder[..., 1] / sub_center_cdecoder[..., 3]).unsqueeze(-1)
+
+                obj_center_cdecoder = reference_points_obj_cdecoder[..., :self.query_dim]
+                query_sine_embed_obj_cdecoder = gen_sineembed_for_position(obj_center_cdecoder, self.d_model)
+                if layer_id == 0:
+                    pos_transformation_obj_cdecoder = 1
+                else:
+                    pos_transformation_obj_cdecoder = self.query_scale_obj(output_obj_cdecoder)
+                query_sine_embed_obj_cdecoder = query_sine_embed_obj_cdecoder[...,:self.d_model] * pos_transformation_obj_cdecoder
+                if self.modulate_hw_attn:
+                    refHW_cond_obj_cdecoder = self.ref_anchor_head_obj(output_obj_cdecoder).sigmoid()
+                    query_sine_embed_obj_cdecoder[..., self.d_model // 2:] *= (refHW_cond_obj_cdecoder[..., 0] / obj_center_cdecoder[..., 2]).unsqueeze(-1)
+                    query_sine_embed_obj_cdecoder[..., :self.d_model // 2] *= (refHW_cond_obj_cdecoder[..., 1] / obj_center_cdecoder[..., 3]).unsqueeze(-1)
+                
+
+            
             #*===================================1tomany==============================================
                 
 
@@ -405,10 +444,17 @@ class TransformerDecoder(nn.Module):
             #same = query_pos_sub.equal(query_pos_obj)  False
             #===================================我加的==============================================
 
+
+
+
+
+
+
+
             # output torch.Size([300, bs, 256])
             # output_sub output_obj [600,bs,256]
             # sub_maps obj_maps [bs, 600, 1000]
-            output, output_sub, output_obj, sub_maps, obj_maps, output_cdecoder = layer( tgt = output,
+            output, output_sub, output_obj, sub_maps, obj_maps, output_cdecoder, output_sub_cdecoder, output_obj_cdecoder, sub_maps_cdecoder, obj_maps_cdecoder  = layer( tgt = output,
                                                                         tgt_sub = output_sub,
                                                                         tgt_obj = output_obj,
                                                                         tgt_cdecoder = output_cdecoder,
@@ -426,7 +472,11 @@ class TransformerDecoder(nn.Module):
                                                                         query_sine_embed_obj=query_sine_embed_obj,
                                                                         query_sine_embed_cdecoder=query_sine_embed_cdecoder,
                                                                         so_embed = so_embed,
-                                                                        is_first=(layer_id == 0))
+                                                                        is_first=(layer_id == 0),
+                                                                        tgt_sub_cdecoder = output_sub_cdecoder,
+                                                                        tgt_obj_cdecoder = output_obj_cdecoder,
+                                                                        query_sine_embed_sub_cdecoder=query_sine_embed_sub_cdecoder,
+                                                                        query_sine_embed_obj_cdecoder=query_sine_embed_obj_cdecoder)
 
             # iter update
             if self.bbox_embed is not None:
@@ -470,9 +520,26 @@ class TransformerDecoder(nn.Module):
             if layer_id != self.num_layers - 1:
                 ref_points_obj.append(new_reference_points_obj)
             reference_points_obj = new_reference_points_obj.detach()
-            #===================================我加的==============================================
-            
 
+
+            #*===================================1tomany==============================================
+            tmp_sub_cdecoder = self.bbox_embed_sub(output_sub_cdecoder)
+            tmp_sub_cdecoder[..., :self.query_dim] += inverse_sigmoid(reference_points_sub_cdecoder)
+            new_reference_points_sub_cdecoder = tmp_sub_cdecoder[..., :self.query_dim].sigmoid()
+            if layer_id != self.num_layers - 1:
+                ref_points_sub_cdecoder.append(new_reference_points_sub_cdecoder)
+            reference_points_sub_cdecoder = new_reference_points_sub_cdecoder.detach()
+
+            tmp_obj_cdecoder = self.bbox_embed_obj(output_obj_cdecoder)
+            tmp_obj_cdecoder[..., :self.query_dim] += inverse_sigmoid(reference_points_obj_cdecoder)
+            new_reference_points_obj_cdecoder = tmp_obj_cdecoder[..., :self.query_dim].sigmoid()
+            if layer_id != self.num_layers - 1:
+                ref_points_obj_cdecoder.append(new_reference_points_obj_cdecoder)
+            reference_points_obj_cdecoder = new_reference_points_obj_cdecoder.detach()
+            #*===================================1tomany==============================================
+
+
+            #===================================我加的==============================================
             #默认True
             if self.return_intermediate:    
                 intermediate.append(self.norm(output))
@@ -482,7 +549,13 @@ class TransformerDecoder(nn.Module):
                 intermediate_submaps.append(sub_maps)
                 intermediate_objmaps.append(obj_maps)
 
+                #*===================================1tomany==============================================
                 intermediate_cdecoder.append(self.norm(output_cdecoder))
+                intermediate_sub_cdecoder.append(self.norm_sub(output_sub_cdecoder))
+                intermediate_obj_cdecoder.append(self.norm_obj(output_obj_cdecoder))
+                intermediate_submaps_cdecoder.append(sub_maps_cdecoder)
+                intermediate_objmaps_cdecoder.append(obj_maps_cdecoder)
+                #*===================================1tomany==============================================
 
 
 
@@ -492,10 +565,12 @@ class TransformerDecoder(nn.Module):
                 intermediate.pop()
                 intermediate.append(output)
 
+            #*===================================1tomany==============================================
             output_cdecoder = self.norm(output_cdecoder)
             if self.return_intermediate:
                 intermediate_cdecoder.pop()
                 intermediate_cdecoder.append(output_cdecoder)
+            #*===================================1tomany==============================================
 
 
         #===================================我加的==============================================
@@ -511,8 +586,25 @@ class TransformerDecoder(nn.Module):
                 intermediate_output_obj.pop()
                 intermediate_output_obj.append(output_obj)
 
-        #===================================我加的==============================================
 
+
+        #*===================================1tomany============================================== 
+        if self.norm is not None:
+            output_sub_cdecoder = self.norm_sub(output_sub_cdecoder) # torch.Size([300, bs, 256])
+            if self.return_intermediate:
+                intermediate_sub_cdecoder.pop()
+                intermediate_sub_cdecoder.append(output_sub_cdecoder)
+
+        if self.norm is not None:
+            output_obj_cdecoder = self.norm_obj(output_obj_cdecoder) # torch.Size([300, bs, 256])
+            if self.return_intermediate:
+                intermediate_obj_cdecoder.pop()
+                intermediate_obj_cdecoder.append(output_obj)
+                
+        #*===================================1tomany==============================================
+
+
+        #===================================我加的==============================================
 
         result = {"hs":torch.stack(intermediate).transpose(1, 2),
                   "reference":torch.stack(ref_points).transpose(1, 2),
@@ -522,10 +614,14 @@ class TransformerDecoder(nn.Module):
                   "reference_obj":torch.stack(ref_points_obj).transpose(1, 2),
                   "hs_cdecoder":torch.stack(intermediate_cdecoder).transpose(1, 2),
                   "reference_cdecoder":torch.stack(ref_points_cdecoder).transpose(1, 2),
+                  "hs_sub_cdecoder":torch.stack(intermediate_sub_cdecoder).transpose(1, 2),
+                  "reference_sub_cdecoder":torch.stack(ref_points_sub_cdecoder).transpose(1, 2),
+                  "hs_obj_cdecoder":torch.stack(intermediate_obj_cdecoder).transpose(1, 2),
+                  "reference_obj_cdecoder":torch.stack(ref_points_obj_cdecoder).transpose(1, 2),
                 }
 
 
-        return result, torch.stack(intermediate_submaps), torch.stack(intermediate_objmaps)
+        return result, torch.stack(intermediate_submaps), torch.stack(intermediate_objmaps), torch.stack(intermediate_submaps_cdecoder), torch.stack(intermediate_objmaps_cdecoder)
 
 
 class TransformerEncoderLayer(nn.Module):
@@ -572,6 +668,7 @@ class TransformerDecoderLayer(nn.Module):
                  rm_self_attn_decoder=False):
         super().__init__()
         # Decoder Self-Attention
+        self.rel_one2many = True
         if not rm_self_attn_decoder:
             self.sa_qcontent_proj = nn.Linear(d_model, d_model)
             self.sa_qpos_proj = nn.Linear(d_model, d_model)
@@ -692,7 +789,11 @@ class TransformerDecoderLayer(nn.Module):
                       query_sine_embed_obj = None,
                       query_sine_embed_cdecoder= None,
                       so_embed = None,
-                      is_first = False):
+                      is_first = False,
+                      tgt_sub_cdecoder = None,
+                      tgt_obj_cdecoder = None,
+                      query_sine_embed_sub_cdecoder=None,
+                      query_sine_embed_obj_cdecoder=None):
         
         # Part 1 DABDETR
         # ========== Begin of Self-Attention =============
@@ -790,46 +891,13 @@ class TransformerDecoderLayer(nn.Module):
         tgt2_cdecoder = self.linear2(self.dropout(self.activation(self.linear1(tgt_cdecoder))))
         tgt_cdecoder = tgt_cdecoder + self.dropout3(tgt2_cdecoder)
         tgt_cdecoder = self.norm3(tgt_cdecoder)
+
         #*======================1tomany==============================
 
 
         #===================================我加的==============================================
-
-        # Part 2 subject query part
+        #* CSA
         t_num = query_pos_sub.shape[0]
-        h_dim = query_pos_sub.shape[2]
-
-        # implementation 1
-        # q_content_sub = self.sa_qcontent_so_proj((tgt_sub+so_embed[0]))
-        # q_pos_sub = self.sa_qpos_so_proj(query_pos_sub)
-        # k_content_sub = self.sa_kcontent_so_proj((tgt_sub+so_embed[0]))
-        # k_pos_sub = self.sa_kpos_so_proj(query_pos_sub)
-        # v_sub = self.sa_v_so_proj((tgt_sub+so_embed[0]))
-
-        # q_content_obj = self.sa_qcontent_so_proj((tgt_obj+so_embed[1]))
-        # q_pos_obj = self.sa_qpos_so_proj(query_pos_obj)
-        # k_content_obj = self.sa_kcontent_so_proj((tgt_obj+so_embed[1]))
-        # k_pos_obj = self.sa_kpos_so_proj(query_pos_obj)
-        # v_obj = self.sa_v_so_proj((tgt_obj+so_embed[1]))
-
-        # q_content_so = torch.cat((q_content_sub, q_content_obj), dim=0)
-        # k_content_so = torch.cat((k_content_sub, k_content_obj), dim=0)
-        # q_pos_so = torch.cat((q_pos_sub, q_pos_obj), dim=0)
-        # k_pos_so = torch.cat((k_pos_sub, k_pos_obj), dim=0)
-
-        # q_so = q_content_so + q_pos_so
-        # k_so = k_content_so + k_pos_so
-        # v_so = torch.cat((v_sub, v_obj), dim=0)
-
-
-
-
-        #这个是reltr的实现，注意tgt_sub和tgt_obj都加了相同的位置编码triplet_pos，但是在我这里先使用了不同的编码
-        # q_sub = k_sub = self.with_pos_embed(self.with_pos_embed(tgt_sub, triplet_pos), so_pos[0])  #so_pos [2,256]
-        # q_obj = k_obj = self.with_pos_embed(self.with_pos_embed(tgt_obj, triplet_pos), so_pos[1])
-
-
-        #implementation 2
         tgt_so = torch.cat(((tgt_sub+so_embed[0]), (tgt_obj+so_embed[1])), dim=0)
         query_pos_so = torch.cat((query_pos_sub, query_pos_obj), dim=0)
         q_content_so_2 = self.sa_qcontent_so_proj(tgt_so)
@@ -845,19 +913,11 @@ class TransformerDecoderLayer(nn.Module):
 
         tgt_so = self.norm2_so(tgt_so) # [1200, bs, 256]
         tgt_sub, tgt_obj = torch.split(tgt_so, t_num, dim=0)   #torch.Size([600, bs, 256]) #torch.Size([600, bs, 256])
+        tgt_og_input_sub = tgt_sub
+        tgt_og_input_obj = tgt_obj
 
 
-        # # 虽然他们的不完全一样，但是他们直接的误差应该是浮点数造成的，而且非常的小，两种实现都是对的
-        # tolerance = 1e-6  # Adjust as needed
-        # are_close1 = torch.allclose(q_pos_so, q_pos_so_2, atol=tolerance)
-        # print("Are q_pos_so and q_pos_so_2 close within tolerance?", are_close1)
-        # are_close2 = torch.allclose(q_content_so, q_content_so_2, atol=tolerance)
-        # are_close3 = torch.allclose(k_content_so, k_content_so_2, atol=tolerance)
-        # are_close4 = torch.allclose(v_so, v_so_2, atol=tolerance)
-        # print(are_close2, are_close3, are_close4) # True True True
-
-
-        # subject branch - decoupled visual attention  这一块负责sub query和memory做cross attn
+        #* subject branch - DVA  这一块负责sub query和memory做cross attn
         q_content_sub_dc = self.sub_dc_ca_qcontent_proj(tgt_sub) # torch.Size([600, bs, 256])
         k_content_sub_dc = self.sub_dc_ca_kcontent_proj(memory)  # torch.Size([1000, bs, 256])  
         k_pos_sub_dc = self.sub_dc_ca_kpos_proj(pos) # torch.Size([1000, bs, 256])  这个pos是给backbone特征图的
@@ -873,7 +933,9 @@ class TransformerDecoderLayer(nn.Module):
         else:
             q_sub_dc = q_content_sub_dc 
             k_sub_dc = k_content_sub_dc 
+
         
+  
         q_sub_dc = rearrange(q_sub_dc, "n bs (head head_dim) -> n bs head head_dim", head=self.nhead, head_dim=(n_model//self.nhead))
         query_sine_embed_sub_dc = self.sub_dc_ca_qpos_sine_proj(query_sine_embed_sub)
         query_sine_embed_sub_dc = rearrange(query_sine_embed_sub_dc, "n bs (head head_dim) -> n bs head head_dim", head=self.nhead, head_dim=(n_model//self.nhead))
@@ -893,7 +955,7 @@ class TransformerDecoderLayer(nn.Module):
         tgt_sub_dc = tgt_sub + self.sub_dc_dropout(tgt2_sub_dc) # torch.Size([600, bs, 256])
         tgt_sub_dc = self.sub_dc_norm(tgt_sub_dc) # torch.Size([600, bs, 256])
 
-        # * subject branch - decoupled entity attention 这块负责tgt_sub_dc再和tgt做ca，tgt就是DAB原版ca的输出过ffn
+        # ? subject branch - DEA 这块负责tgt_sub_dc再和tgt做ca，tgt就是DAB原版ca的输出过ffn
         # query: tgt_sub_dc   key: tgt
         # todo query_pos: 方案1：使用692行的query_sine_embed_sub_dc  方案2：self.sub_dea_ca_qpos_sine_proj(query_sine_embed_sub)
         # todo key_pos: 方案1：使用592行的query_sine_embed           方案2：self.sub_dea_ca_kpos_sine_proj(query_sine_embed)
@@ -933,7 +995,7 @@ class TransformerDecoderLayer(nn.Module):
         tgt_sub_dea = self.sub_dea_norm3(tgt_sub_dea)
 
         # Part 3 object query part
-        # * object branch - decoupled visual attention  这一块负责obj query和memory做cross attn
+        #* object branch - decoupled visual attention  这一块负责obj query和memory做cross attn
         q_content_obj_dc = self.obj_dc_ca_qcontent_proj(tgt_obj) # torch.Size([600, bs, 256])
         k_content_obj_dc = self.obj_dc_ca_kcontent_proj(memory)  # torch.Size([1000, bs, 256])  
         k_pos_obj_dc = self.obj_dc_ca_kpos_proj(pos) # torch.Size([1000, bs, 256])  这个pos是给backbone特征图的
@@ -965,8 +1027,7 @@ class TransformerDecoderLayer(nn.Module):
         tgt_obj_dc = tgt_obj + self.obj_dc_dropout(tgt2_obj_dc) # torch.Size([600, bs, 256])
         tgt_obj_dc = self.obj_dc_norm(tgt_obj_dc) # torch.Size([600, bs, 256])
 
-
-        # * object branch - decoupled entity attention 这块负责tgt_obj_dc再和tgt做ca，tgt就是DAB原版ca的输出过ffn
+        # ? object branch - DEA 这块负责tgt_obj_dc再和tgt做ca，tgt就是DAB原版ca的输出过ffn
         q_content_obj_dea = self.obj_dea_ca_qcontent_proj(tgt_obj_dc) # torch.Size([600, bs, 256])
         k_content_obj_dea = self.obj_dea_ca_kcontent_proj(tgt) # torch.Size([300, bs, 256])
         q_pos_obj_dea = query_sine_embed_obj_dc #[600, bs, 8, 32]
@@ -1000,8 +1061,114 @@ class TransformerDecoderLayer(nn.Module):
         tgt_obj_dea = self.obj_dea_norm3(tgt_obj_dea)
         #===================================我加的==============================================
 
+        
+        #*======================1tomany==============================
+        #todo 原版7个attention，现在去掉entity的SA和CSA来处理one2many
+        if self.rel_one2many:
+            if is_first:
+                tgt_sub_cdecoder = tgt_og_input_sub
+
+            #* Sub DVA
+            q_content_sub_dc_cdecoder = self.sub_dc_ca_qcontent_proj(tgt_sub_cdecoder)
+            if is_first:
+                q_sub_dc_cdecoder = q_content_sub_dc_cdecoder + q_pos_sub_dc 
+            else:
+                q_sub_dc_cdecoder = q_content_sub_dc_cdecoder 
+            q_sub_dc_cdecoder = rearrange(q_sub_dc_cdecoder, "n bs (head head_dim) -> n bs head head_dim", head=self.nhead, head_dim=(n_model//self.nhead))
+            query_sine_embed_sub_dc_cdecoder = self.sub_dc_ca_qpos_sine_proj(query_sine_embed_sub_cdecoder)
+            query_sine_embed_sub_dc_cdecoder =  rearrange(query_sine_embed_sub_dc_cdecoder, "n bs (head head_dim) -> n bs head head_dim", head=self.nhead, head_dim=(n_model//self.nhead))
+            q_sub_dc_cdecoder = torch.cat([q_sub_dc_cdecoder, query_sine_embed_sub_dc_cdecoder], dim=3).view(num_queries_sub, bs, n_model * 2)
+            tgt2_sub_dc_cdecoder, sub_maps_cdecoder = self.sub_dc_cross_attn(query=q_sub_dc_cdecoder,
+                                                                             key=k_sub_dc,
+                                                                             value=v_sub_dc, 
+                                                                             attn_mask=memory_mask, #None
+                                                                             key_padding_mask=memory_key_padding_mask)
+            tgt_sub_dc_cdecoder = tgt_sub_cdecoder + self.sub_dc_dropout(tgt2_sub_dc_cdecoder)
+            tgt_sub_dc_cdecoder = self.sub_dc_norm(tgt_sub_dc_cdecoder)
+
+            #? Sub DEA
+            q_content_sub_dea_cdecoder = self.sub_dea_ca_qcontent_proj(tgt_sub_dc_cdecoder)
+            q_pos_sub_dea_cdecoder = query_sine_embed_sub_dc_cdecoder
+            q_content_sub_dea_cdecoder = rearrange(q_content_sub_dea_cdecoder, 
+                                                    "n bs (head head_dim) -> n bs head head_dim", 
+                                                    head=self.nhead, head_dim=(n_model//self.nhead))
+            q_sub_dea_cdecoder = torch.cat([q_content_sub_dea_cdecoder, q_pos_sub_dea_cdecoder], dim=3).view(num_queries_sub, bs, n_model * 2)
+
+
+            k_content_sub_dea_cdecoder = self.sub_dea_ca_kcontent_proj(tgt_cdecoder)
+            k_pos_sub_dea_cdecoder = query_sine_embed_cdecoder
+            k_content_sub_dea_cdecoder = rearrange(k_content_sub_dea_cdecoder, 
+                                                    "n bs (head head_dim) -> n bs head head_dim", 
+                                                    head=self.nhead, head_dim=(n_model//self.nhead))
+            k_sub_dea_cdecoder = torch.cat([k_content_sub_dea_cdecoder, k_pos_sub_dea_cdecoder], dim=3).view(num_queries, bs, n_model * 2)
+            v_sub_dea_cdecoder = self.sub_dea_ca_v_proj(tgt_cdecoder) 
+
+            tgt2_sub_dea_cdecoder = self.sub_dea_cross_attn( query=q_sub_dea_cdecoder,
+                                                            key=k_sub_dea_cdecoder,
+                                                            value=v_sub_dea_cdecoder,
+                                                            attn_mask=None,
+                                                            key_padding_mask=None
+                                                        )[0]
+        
+            tgt_sub_dea_cdecoder = tgt_sub_dc_cdecoder + self.sub_dea_dropout2(tgt2_sub_dea_cdecoder)
+            tgt_sub_dea_cdecoder = self.sub_dea_norm(tgt_sub_dea_cdecoder)
+            tgt_sub_dea2_cdecoder = self.sub_dea_linear2(self.sub_dea_dropout(self.activation(self.sub_dea_linear1(tgt_sub_dea_cdecoder))))
+            tgt_sub_dea_cdecoder = tgt_sub_dea_cdecoder + self.sub_dea_dropout3(tgt_sub_dea2_cdecoder)
+            tgt_sub_dea_cdecoder = self.sub_dea_norm3(tgt_sub_dea_cdecoder)
+
+
+            #* Obj DVA
+            if is_first:
+                tgt_obj_cdecoder = tgt_og_input_obj
+            q_content_obj_dc_cdecoder = self.obj_dc_ca_qcontent_proj(tgt_obj_cdecoder)
+            if is_first:
+                q_obj_dc_cdecoder = q_content_obj_dc_cdecoder + q_pos_obj_dc
+            else:
+                q_obj_dc_cdecoder = q_content_obj_dc_cdecoder
+            q_obj_dc_cdecoder = rearrange(q_obj_dc_cdecoder, "n bs (head head_dim) -> n bs head head_dim", head=self.nhead, head_dim=(n_model//self.nhead))
+            query_sine_embed_obj_dc_cdecoder = self.obj_dc_ca_qpos_sine_proj(query_sine_embed_obj_cdecoder)
+            query_sine_embed_obj_dc_cdecoder = rearrange(query_sine_embed_obj_dc_cdecoder, "n bs (head head_dim) -> n bs head head_dim", head=self.nhead, head_dim=(n_model//self.nhead))
+            q_obj_dc_cdecoder = torch.cat([q_obj_dc_cdecoder, query_sine_embed_obj_dc_cdecoder], dim=3).view(num_queries_sub, bs, n_model * 2)
+            tgt2_obj_dc_cdecoder, obj_maps_cdecoder = self.obj_dc_cross_attn( query=q_obj_dc_cdecoder,
+                                                                              key=k_obj_dc,
+                                                                              value=v_obj_dc, 
+                                                                              attn_mask=memory_mask, #None
+                                                                              key_padding_mask=memory_key_padding_mask)
+            tgt_obj_dc_cdecoder = tgt_obj_cdecoder + self.obj_dc_dropout(tgt2_obj_dc_cdecoder)
+            tgt_obj_dc_cdecoder = self.obj_dc_norm(tgt_obj_dc_cdecoder) 
+
+            #? Obj DEA
+            q_content_obj_dea_cdecoder = self.obj_dea_ca_qcontent_proj(tgt_obj_dc_cdecoder)
+            q_pos_obj_dea_cdecoder = query_sine_embed_obj_dc_cdecoder
+            q_content_obj_dea_cdecoder = rearrange(q_content_obj_dea_cdecoder, 
+                                                    "n bs (head head_dim) -> n bs head head_dim", 
+                                                    head=self.nhead, head_dim=(n_model//self.nhead))
+            q_obj_dea_cdecoder = torch.cat([q_content_obj_dea_cdecoder, q_pos_obj_dea_cdecoder], dim=3).view(num_queries_sub, bs, n_model * 2)
+
+            k_content_obj_dea_cdecoder = self.obj_dea_ca_kcontent_proj(tgt_cdecoder)
+            k_pos_obj_dea_cdecoder = query_sine_embed_cdecoder
+            k_content_obj_dea_cdecoder = rearrange(k_content_obj_dea_cdecoder, 
+                                                    "n bs (head head_dim) -> n bs head head_dim", 
+                                                    head=self.nhead, head_dim=(n_model//self.nhead))
+            k_obj_dea_cdecoder = torch.cat([k_content_obj_dea_cdecoder, k_pos_obj_dea_cdecoder], dim=3).view(num_queries, bs, n_model * 2)
+            v_obj_dea_cdecoder = self.obj_dea_ca_v_proj(tgt_cdecoder)
+
+            tgt2_obj_dea_cdecoder = self.obj_dea_cross_attn( query=q_obj_dea_cdecoder,
+                                                            key=k_obj_dea_cdecoder,
+                                                            value=v_obj_dea_cdecoder,
+                                                            attn_mask=None,
+                                                            key_padding_mask=None
+                                                        )[0]
+            tgt_obj_dea_cdecoder = tgt_obj_dc_cdecoder + self.obj_dea_dropout2(tgt2_obj_dea_cdecoder)
+            tgt_obj_dea_cdecoder = self.obj_dea_norm(tgt_obj_dea_cdecoder)
+            tgt_obj_dea2_cdecoder = self.obj_dea_linear2(self.obj_dea_dropout(self.activation(self.obj_dea_linear1(tgt_obj_dea_cdecoder))))
+            tgt_obj_dea_cdecoder = tgt_obj_dea_cdecoder + self.obj_dea_dropout3(tgt_obj_dea2_cdecoder)
+            tgt_obj_dea_cdecoder = self.obj_dea_norm3(tgt_obj_dea_cdecoder)
+        #*======================1tomany==============================
+
+
         #tgt_triplet = torch.cat((tgt_sub_dea, tgt_obj_dea), dim=-1) #torch.Size([600, bs, 512])
-        return tgt, tgt_sub_dea, tgt_obj_dea, sub_maps, obj_maps, tgt_cdecoder
+        return tgt, tgt_sub_dea, tgt_obj_dea, sub_maps, obj_maps, tgt_cdecoder, tgt_sub_dea_cdecoder, tgt_obj_dea_cdecoder, sub_maps_cdecoder, obj_maps_cdecoder
     
 
 

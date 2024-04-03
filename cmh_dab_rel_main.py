@@ -8,7 +8,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader, DistributedSampler
 import os, sys
-# os.environ['WANDB_MODE'] = 'disabled'
+os.environ['WANDB_MODE'] = 'disabled'
 from typing import Optional
 import datasets
 from models.DABRelTR.util import misc as utils  #import DABRelTR.util.misc 
@@ -180,7 +180,8 @@ def main(args):
     # 使用os.environ.get()获取'WORLD_SIZE'，如果未设置则默认为1
     world_size = int(os.environ.get('WORLD_SIZE', 1))
     if local_rank == 0 and world_size > 1:
-        wandb.init(project="SGG", entity="dreamer0312")
+        wandb.init(project="SGG", entity="dreamer0312", id="solar-eon-194", resume="allow")
+        
 
     if args.frozen_weights is not None:
         assert args.masks, "Frozen training is meant for segmentation only"
