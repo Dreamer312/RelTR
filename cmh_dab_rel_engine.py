@@ -231,7 +231,7 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, arg
 
         #SGG eval
         if args.dataset == 'vg':
-            evaluate_rel_batch(outputs, targets, evaluator, evaluator_list)
+            evaluate_rel_batch_sig_test(outputs, targets, evaluator, evaluator_list)
         else:
             evaluate_rel_batch_oi(outputs, targets, all_results)
 
@@ -279,6 +279,88 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, arg
     return stats, coco_evaluator
 
 
+def evaluate_rel_batch_sig_test(outputs, targets, evaluator, evaluator_list):
+    num_select = 300
+    
+    rel_prob = outputs['rel_logits'].sigmoid()  #[bs, 400, 51]
+    rel_prob_reshape = rel_prob.view(rel_prob.shape[0], -1)  # [bs, 20,400]
+
+    topk_values, topk_indexes = torch.topk(rel_prob_reshape, num_select, dim=1)
+    topk_rel = topk_indexes // rel_prob.shape[2]  #[bs, 400]
+    rel_labels = topk_indexes % rel_prob.shape[2] #[bs, 400]
+    rel_scores = topk_values   #[bs, 400]
+
+    # sub_prob = outputs['sub_logits'].sigmoid() #[bs,400,151]
+    # sub_prob = sub_prob.view(outputs['sub_logits'].shape[0], -1)
+    # obj_prob = outputs['obj_logits'].sigmoid() #[bs,400,151]
+    # obj_prob = obj_prob.view(outputs['obj_logits'].shape[0], -1) 
+
+
+    for batch, target in enumerate(targets):
+        target_bboxes_scaled = rescale_bboxes(target['boxes'].cpu(), torch.flip(target['orig_size'],dims=[0]).cpu()).clone().numpy()
+        gt_entry = {'gt_classes': target['labels'].cpu().clone().numpy(),
+                    'gt_relations': target['rel_annotations'].cpu().clone().numpy(),
+                    'gt_boxes': target_bboxes_scaled}    
+        
+        sub_bboxes_scaled = rescale_bboxes(outputs['sub_boxes'][batch].cpu(), torch.flip(target['orig_size'],dims=[0]).cpu()).clone().numpy()
+        obj_bboxes_scaled = rescale_bboxes(outputs['obj_boxes'][batch].cpu(), torch.flip(target['orig_size'],dims=[0]).cpu()).clone().numpy()
+
+
+        #pred_sub_scores, pred_sub_classes = torch.max(outputs['sub_logits'][batch].softmax(-1)[:, :-1], dim=1) # 这样取不到150类（斑马）
+        #pred_obj_scores, pred_obj_classes = torch.max(outputs['obj_logits'][batch].softmax(-1)[:, :-1], dim=1)
+
+        pred_sub_scores, pred_sub_classes = torch.max(outputs['sub_logits'][batch].sigmoid(), dim=1)
+        pred_obj_scores, pred_obj_classes = torch.max(outputs['obj_logits'][batch].sigmoid(), dim=1)
+
+        #rel_scores_sig, rel_classes_sig = torch.max(outputs['rel_logits'][batch].sigmoid(), dim=1)
+        #rel_scores_sig = outputs['rel_logits'][batch].sigmoid()
+
+        # print(pred_sub_classes.equal(pred_sub_classes_sig)) # True
+
+        # is_50_in_tensor = 150 in pred_sub_classes_sig
+        # if is_50_in_tensor:
+        #     print(pred_sub_classes)
+        #     assert(0)
+
+
+
+        # mask = (pred_sub_classes - pred_obj_classes != 0).cpu()
+        # not_same_pair_num = mask.sum()
+        # mask_sig = (pred_sub_classes_sig - pred_obj_classes_sig != 0).cpu()
+        # not_same_pair_sig_num = mask_sig.sum()
+
+        # #todo  1.先简单的组合一下看看结果怎么
+        # tri_prob = pred_sub_scores * pred_obj_scores * rel_scores_sig
+        # sorted_values, sorted_indices = torch.sort(tri_prob, descending=True)
+
+        top_rel_index = topk_rel[batch]
+        top_pred_sub_scores = pred_sub_scores[top_rel_index]
+        top_pred_sub_classes = pred_sub_classes[top_rel_index]
+        top_sub_boxes = sub_bboxes_scaled[top_rel_index.cpu().clone().numpy()]
+
+        top_pred_obj_scores = pred_obj_scores[top_rel_index]
+        top_pred_obj_classes = pred_obj_classes[top_rel_index]
+        top_obj_boxes = obj_bboxes_scaled[top_rel_index.cpu().clone().numpy()]
+
+        pred_entry = {'sub_boxes': top_sub_boxes,
+                      'sub_classes': top_pred_sub_classes.cpu().clone().numpy(),
+                      'sub_scores': top_pred_sub_scores.cpu().clone().numpy(),
+                      'obj_boxes': top_obj_boxes,
+                      'obj_classes': top_pred_obj_classes.cpu().clone().numpy(),
+                      'obj_scores': top_pred_obj_scores.cpu().clone().numpy(),
+                      'predicate_scores': rel_scores[batch].cpu().clone().numpy(),
+                      'pred_rels':rel_labels[batch].cpu().clone().numpy()}
+                      
+        evaluator['sgdet'].evaluate_scene_graph_entry(gt_entry, pred_entry)
+
+        if evaluator_list is not None:
+            for pred_id, _, evaluator_rel in evaluator_list:
+                gt_entry_rel = gt_entry.copy()
+                mask = np.in1d(gt_entry_rel['gt_relations'][:, -1], pred_id)
+                gt_entry_rel['gt_relations'] = gt_entry_rel['gt_relations'][mask, :]
+                if gt_entry_rel['gt_relations'].shape[0] == 0:
+                    continue
+                evaluator_rel['sgdet'].evaluate_scene_graph_entry(gt_entry_rel, pred_entry)
 
 def evaluate_rel_batch(outputs, targets, evaluator, evaluator_list):
 

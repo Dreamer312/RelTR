@@ -402,6 +402,9 @@ class SetCriterion(nn.Module):
         self.one2many = Stage2Assigner(num_queries)  #* 不知道这个300是怎么设置的，可以问问
         self.one2many_rel = Stage2AssignerRel(num_queries)
 
+        self.entity_one2many = False
+        self.relation_one2many = True
+
     def loss_labels(self, outputs, targets, indices, num_boxes, log=True, one2many=False):
             """Entity/subject/object Classification loss with focal loss"""
             
@@ -644,21 +647,22 @@ class SetCriterion(nn.Module):
         if is_dist_avail_and_initialized():
             torch.distributed.all_reduce(num_boxes)
         num_boxes = torch.clamp(num_boxes / get_world_size(), min=1).item()
-        
-        #*======================1tomany=================================
-        indices_one2many = self.one2many(outputs_without_aux, targets)
-        num_boxes_balance = num_boxes*3
-        
         losses = {}
         for loss in self.losses:
             losses.update(self.get_loss(loss, outputs, targets, indices, num_boxes))
-        losses_one2many = self.loss_labels_one2many(outputs, targets, indices_one2many, num_boxes_balance)
-        losses_one2many.update(self.loss_boxes_one2many(outputs, targets, indices_one2many, num_boxes_balance))
-        losses.update(losses_one2many)
+        
+        #*======================1tomany=================================
+        indices_one2many = self.one2many(outputs_without_aux, targets)
+        num_boxes_balance = num_boxes*3  
+        if self.entity_one2many:
+            losses_one2many = self.loss_labels_one2many(outputs, targets, indices_one2many, num_boxes_balance)
+            losses_one2many.update(self.loss_boxes_one2many(outputs, targets, indices_one2many, num_boxes_balance))
+            losses.update(losses_one2many)
 
-        indices_one2many_rel = self.one2many_rel(outputs_without_aux, targets)
-        loss_relations_one2many = self.loss_relations_one2many(outputs, targets, indices_one2many_rel, num_boxes_balance)
-        losses.update(loss_relations_one2many)
+        if self.relation_one2many:
+            indices_one2many_rel = self.one2many_rel(outputs_without_aux, targets)
+            loss_relations_one2many = self.loss_relations_one2many(outputs, targets, indices_one2many_rel, num_boxes_balance)
+            losses.update(loss_relations_one2many)
         #*======================1tomany=================================
 
         
@@ -675,14 +679,18 @@ class SetCriterion(nn.Module):
                     l_dict = self.get_loss(loss, aux_outputs, targets, indices, num_boxes, **kwargs)
                     l_dict = {k + f'_{i}': v for k, v in l_dict.items()}
                     losses.update(l_dict)
-                losses_one2many = self.loss_labels_one2many(aux_outputs, targets, indices_one2many, num_boxes_balance)
-                losses_one2many.update(self.loss_boxes_one2many(aux_outputs, targets, indices_one2many, num_boxes_balance))
-                losses_one2many = {k + f"_{i}": v for k, v in losses_one2many.items()}
-                loss_relations_one2many = self.loss_relations_one2many(aux_outputs, targets, indices_one2many_rel, num_boxes_balance)
-                loss_relations_one2many = {k + f"_{i}": v for k, v in loss_relations_one2many.items()}
-                losses.update(losses_one2many)
                 
-                losses.update(loss_relations_one2many)
+                if self.entity_one2many:
+                    losses_one2many = self.loss_labels_one2many(aux_outputs, targets, indices_one2many, num_boxes_balance)
+                    losses_one2many.update(self.loss_boxes_one2many(aux_outputs, targets, indices_one2many, num_boxes_balance))
+                    losses_one2many = {k + f"_{i}": v for k, v in losses_one2many.items()}
+                    losses.update(losses_one2many)
+                
+                if self.relation_one2many:
+                    loss_relations_one2many = self.loss_relations_one2many(aux_outputs, targets, indices_one2many_rel, num_boxes_balance)
+                    loss_relations_one2many = {k + f"_{i}": v for k, v in loss_relations_one2many.items()}       
+                    losses.update(loss_relations_one2many)
+                    
         return losses
 
 
