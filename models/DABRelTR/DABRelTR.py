@@ -106,6 +106,9 @@ class DABRelTR(nn.Module):
         self.input_proj = nn.Conv2d(backbone.num_channels, hidden_dim, kernel_size=1)
         self.backbone = backbone
         self.aux_loss = aux_loss
+
+        self.share_box_head = True
+        self.share_classifier = True
         #=============================================================================
 
         #=============================DAB================================================
@@ -127,11 +130,26 @@ class DABRelTR(nn.Module):
 
         self.refpoint_embed = nn.Embedding(num_queries, query_dim) #Embedding(300, 4)
 
-                
+        prior_prob = 0.01
+        bias_value = -math.log((1 - prior_prob) / prior_prob)
+        self.class_embed.bias.data = torch.ones(num_classes) * bias_value
+
+        # import ipdb; ipdb.set_trace()
+        # init bbox_embed
+        if bbox_embed_diff_each_layer:
+            for bbox_embed in self.bbox_embed:
+                nn.init.constant_(bbox_embed.layers[-1].weight.data, 0)
+                nn.init.constant_(bbox_embed.layers[-1].bias.data, 0)
+        else:
+            nn.init.constant_(self.bbox_embed.layers[-1].weight.data, 0)
+            nn.init.constant_(self.bbox_embed.layers[-1].bias.data, 0)
+
+
+
+
         #===========================我加的=========================================
         #另外的600个subject和600个object的框子
         self.refpoint_embed_triplets = nn.Embedding(num_triplets, query_dim) #Embedding(600, 4)
-
 
 
         self.random_refpoints_xy = random_refpoints_xy
@@ -147,49 +165,39 @@ class DABRelTR(nn.Module):
             self.refpoint_embed_triplets.weight.data[:, :2].requires_grad = False
 
 
-            # a = self.refpoint_embed_triplets.weight.data[:, :2].equal(self.refpoint_embed.weight.data[:, :2])
-            # print(a)
-            # assert(0)
 
-        self.bbox_embed_sub = MLP(hidden_dim, hidden_dim, 4, 3)
-        self.bbox_embed_obj = MLP(hidden_dim, hidden_dim, 4, 3)
-        nn.init.constant_(self.bbox_embed_sub.layers[-1].weight.data, 0)
-        nn.init.constant_(self.bbox_embed_sub.layers[-1].bias.data, 0)
-        nn.init.constant_(self.bbox_embed_obj.layers[-1].weight.data, 0)
-        nn.init.constant_(self.bbox_embed_obj.layers[-1].bias.data, 0)
+
+        if self.share_box_head:
+            self.bbox_embed_sub = self.bbox_embed
+            self.bbox_embed_obj = self.bbox_embed
+        else:
+            self.bbox_embed_sub = MLP(hidden_dim, hidden_dim, 4, 3)
+            self.bbox_embed_obj = MLP(hidden_dim, hidden_dim, 4, 3)
+            nn.init.constant_(self.bbox_embed_sub.layers[-1].weight.data, 0)
+            nn.init.constant_(self.bbox_embed_sub.layers[-1].bias.data, 0)
+            nn.init.constant_(self.bbox_embed_obj.layers[-1].weight.data, 0)
+            nn.init.constant_(self.bbox_embed_obj.layers[-1].bias.data, 0)
 
         self.transformer.decoder.bbox_embed_sub = self.bbox_embed_sub
         self.transformer.decoder.bbox_embed_obj = self.bbox_embed_obj
 
 
-        prior_prob = 0.01
-        bias_value = -math.log((1 - prior_prob) / prior_prob)
 
-        self.sub_class_embed = nn.Linear(hidden_dim, num_classes)
-        self.obj_class_embed = nn.Linear(hidden_dim, num_classes)
+
+        if self.share_classifier:
+            self.sub_class_embed = self.class_embed
+            self.obj_class_embed = self.class_embed
+        else:
+            self.sub_class_embed = nn.Linear(hidden_dim, num_classes)
+            self.obj_class_embed = nn.Linear(hidden_dim, num_classes)
+            self.sub_class_embed.bias.data = torch.ones(num_classes) * bias_value
+            self.obj_class_embed.bias.data = torch.ones(num_classes) * bias_value
+
+        
         self.rel_class_embed = MLP(hidden_dim*2+128, hidden_dim, num_rel_classes, 2)  # num_rel_classes==51
-
-        self.sub_class_embed.bias.data = torch.ones(num_classes) * bias_value
-        self.obj_class_embed.bias.data = torch.ones(num_classes) * bias_value
         self.rel_class_embed.layers[-1].bias.data = torch.ones(num_rel_classes) * bias_value
         #===========================我加的=========================================
     
-        # init prior_prob setting for focal loss
-        
-        self.class_embed.bias.data = torch.ones(num_classes) * bias_value
-
-        # import ipdb; ipdb.set_trace()
-        # init bbox_embed
-        if bbox_embed_diff_each_layer:
-            for bbox_embed in self.bbox_embed:
-                nn.init.constant_(bbox_embed.layers[-1].weight.data, 0)
-                nn.init.constant_(bbox_embed.layers[-1].bias.data, 0)
-        else:
-            nn.init.constant_(self.bbox_embed.layers[-1].weight.data, 0)
-            nn.init.constant_(self.bbox_embed.layers[-1].bias.data, 0)
-
-        #=============================================================================
-
         #=============================Rel================================================
         # self.entity_embed = nn.Embedding(num_entities, hidden_dim*2)  #torch.Size([100, 512])
         # self.triplet_embed = nn.Embedding(num_triplets, hidden_dim*3) #triplet_embed torch.Size([200, 768])
@@ -402,7 +410,7 @@ class SetCriterion(nn.Module):
         self.one2many = Stage2Assigner(num_queries)  #* 不知道这个300是怎么设置的，可以问问
         self.one2many_rel = Stage2AssignerRel(num_queries)
 
-        self.entity_one2many = False
+        self.entity_one2many = True
         self.relation_one2many = True
 
     def loss_labels(self, outputs, targets, indices, num_boxes, log=True, one2many=False):

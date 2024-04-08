@@ -8,7 +8,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader, DistributedSampler
 import os, sys
-os.environ['WANDB_MODE'] = 'disabled'
+# os.environ['WANDB_MODE'] = 'disabled'
 from typing import Optional
 import datasets
 from models.DABRelTR.util import misc as utils  #import DABRelTR.util.misc 

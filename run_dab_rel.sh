@@ -1049,28 +1049,28 @@
 
 
 # one2many加在entity和relation上，sub和obj没有加
-export CUDA_VISIBLE_DEVICES=4,5,6,7
-torchrun --nproc_per_node=4 \
-         --standalone \
-         --nnodes=1 \
-         cmh_dab_rel_main.py \
-            --dataset vg \
-            --img_folder "/data1/cmh/Datasets/VisualGenome/vg/images/" \
-            --ann_path "/data1/cmh/Datasets/VisualGenome/vg/" \
-            --modelname dab_detr \
-            --batch_size=4 \
-            --output_dir ./wdb194_one2many_2 \
-            --epochs 50 \
-            --lr_drop 40 \
-            --random_refpoints_xy \
-            --dropout=0.1 \
-            --num_entities=200 \
-            --num_triplets=300 \
-            --num_select=200 \
-            --set_cost_class=2 \
-            --set_cost_class_dab=2 \
-            --resume=/home/cmh/project/detrs/DAB_RelTR/wdb194_one2many_2/checkpoint0044.pth \
-            --eval
+# export CUDA_VISIBLE_DEVICES=4,5,6,7
+# torchrun --nproc_per_node=4 \
+#          --standalone \
+#          --nnodes=1 \
+#          cmh_dab_rel_main.py \
+#             --dataset vg \
+#             --img_folder "/data1/cmh/Datasets/VisualGenome/vg/images/" \
+#             --ann_path "/data1/cmh/Datasets/VisualGenome/vg/" \
+#             --modelname dab_detr \
+#             --batch_size=4 \
+#             --output_dir ./wdb194_one2many_2 \
+#             --epochs 50 \
+#             --lr_drop 40 \
+#             --random_refpoints_xy \
+#             --dropout=0.1 \
+#             --num_entities=200 \
+#             --num_triplets=300 \
+#             --num_select=200 \
+#             --set_cost_class=2 \
+#             --set_cost_class_dab=2 \
+#             --resume=/home/cmh/project/detrs/DAB_RelTR/wdb194_one2many_2/checkpoint0044.pth \
+#             --eval
  
 
 
@@ -1095,4 +1095,28 @@ torchrun --nproc_per_node=4 \
 #             --num_select=200 \
 #             --set_cost_class=2 \
 #             --set_cost_class_dab=2 \
+
+
+
+export CUDA_VISIBLE_DEVICES=0,1,2,3
+torchrun --nproc_per_node=4 \
+         --standalone \
+         --nnodes=1 \
+         cmh_dab_rel_main.py \
+            --dataset vg \
+            --img_folder "/data1/cmh/Datasets/VisualGenome/vg/images/" \
+            --ann_path "/data1/cmh/Datasets/VisualGenome/vg/" \
+            --modelname dab_detr \
+            --batch_size=4 \
+            --output_dir ./wdb207_one2many_7 \
+            --epochs 36 \
+            --lr_drop 30 \
+            --random_refpoints_xy \
+            --dropout=0.1 \
+            --num_entities=200 \
+            --num_triplets=300 \
+            --num_select=200 \
+            --set_cost_class=2 \
+            --set_cost_class_dab=2 \
+
             
