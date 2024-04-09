@@ -231,7 +231,7 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, arg
 
         #SGG eval
         if args.dataset == 'vg':
-            evaluate_rel_batch(outputs, targets, evaluator, evaluator_list)
+            evaluate_rel_batch_sig_test(outputs, targets, evaluator, evaluator_list)
         else:
             evaluate_rel_batch_oi(outputs, targets, all_results)
 

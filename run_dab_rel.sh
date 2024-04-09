@@ -1118,5 +1118,7 @@ torchrun --nproc_per_node=4 \
             --num_select=200 \
             --set_cost_class=2 \
             --set_cost_class_dab=2 \
+            --resume=/home/cmh/project/detrs/DAB_RelTR/wdb207_one2many_7/checkpoint.pth \
+            --eval
 
             
