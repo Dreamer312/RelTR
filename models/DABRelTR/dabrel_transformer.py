@@ -72,6 +72,7 @@ class Transformer(nn.Module):
                  num_patterns=0,
                  modulate_hw_attn=True,
                  bbox_embed_diff_each_layer=False,
+                 global_context_query=True
                  ):
 
         super().__init__()
@@ -117,6 +118,11 @@ class Transformer(nn.Module):
             self.num_patterns = 0
         if self.num_patterns > 0:
             self.patterns = nn.Embedding(self.num_patterns, d_model)
+        
+
+        
+        if global_context_query:
+            self.context_query = nn.Parameter(torch.zeros(1, 2, d_model))
 
     def _reset_parameters(self):
         for p in self.parameters():
@@ -162,7 +168,8 @@ class Transformer(nn.Module):
                                                     pos=pos_embed, 
                                                     so_embed = so_embed,
                                                     refpoints_unsigmoid=refpoint_embed,
-                                                    refpoints_unsigmoid_triplets=refpoint_embed_triplets)
+                                                    refpoints_unsigmoid_triplets=refpoint_embed_triplets,
+                                                    context_query=self.context_query)
         
         so_masks = torch.cat((sub_maps.reshape(sub_maps.shape[0], bs, sub_maps.shape[2], 1, h, w),
                               obj_maps.reshape(obj_maps.shape[0], bs, obj_maps.shape[2], 1, h, w)), dim=3)
@@ -504,8 +511,6 @@ class TransformerDecoder(nn.Module):
 
 
             #===================================我加的==============================================
-            #todo 原版DAB的query在做完与memory的ca之后就输出了，然后经过self.bbox_embed变换，但是这里reltr多了一层sub和entity的ca
-            #todo 同样可以在后面试试哪种更合适
             tmp_sub = self.bbox_embed_sub(output_sub) #torch.Size([600, bs 4])
             tmp_sub[..., :self.query_dim] += inverse_sigmoid(reference_points_sub)
             new_reference_points_sub = tmp_sub[..., :self.query_dim].sigmoid()
@@ -897,7 +902,7 @@ class TransformerDecoderLayer(nn.Module):
 
         #===================================我加的==============================================
         #* CSA
-        t_num = query_pos_sub.shape[0]
+        t_num = query_pos_sub.shape[0] #300
         tgt_so = torch.cat(((tgt_sub+so_embed[0]), (tgt_obj+so_embed[1])), dim=0)
         query_pos_so = torch.cat((query_pos_sub, query_pos_obj), dim=0)
         q_content_so_2 = self.sa_qcontent_so_proj(tgt_so)
